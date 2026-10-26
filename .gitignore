@@ -1,0 +1,12 @@
+config.json
+*.local.json
+.env
+.env.*
+state/
+runs/
+output/
+*.log
+*authorization*.json
+*receipt*.json
+node_modules/
+__pycache__/

@@ -1,0 +1,13 @@
+{
+  "name": "ad-operator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conversation adapter for an existing Qianchuan and local delivery backend",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test scripts/*.test.mjs"
+  }
+}
