@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">ad-operator：用自然语言，指挥投放</title>
+  <desc id="desc">产品调用关系：用户用自然语言下达指令，Agent 通过巨量引擎 MAPI 查询投放数据、执行授权操作并读取结果，覆盖千川、随心推和巨量本地推。</desc>
+  <rect width="1200" height="760" rx="16" fill="#0B0D11"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif">
+    <g id="product-title">
+      <path d="M64 52h24v24H64z" fill="#C6F184"/>
+      <path d="m70 60 7 4-7 4m10 0h5" fill="none" stroke="#0B0D11" stroke-width="2"/>
+      <text x="108" y="77" font-size="34" font-weight="700" letter-spacing="3" fill="#F5F2EB">AD OPERATOR</text>
+      <text x="64" y="204" font-size="86" font-weight="700" letter-spacing="-2" fill="#F5F2EB">用自然语言，指挥投放。</text>
+      <text x="64" y="268" font-size="34" fill="#A6ADB8">你下指令，Agent 调用接口并执行。</text>
+      <path d="M64 312h1072" stroke="#363B43"/>
+    </g>
+    <g id="api-workflow">
+      <rect x="64" y="370" width="254" height="142" rx="8" fill="#181C22"/>
+      <text x="191" y="431" text-anchor="middle" font-size="42" font-weight="600" fill="#F5F2EB">自然对话</text>
+      <text x="191" y="480" text-anchor="middle" font-size="32" fill="#A6ADB8">对象 · 条件 · 动作</text>
+      <path d="M340 442h69m-12-12 12 12-12 12" fill="none" stroke="#C6F184" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="432" y="370" width="282" height="142" rx="8" fill="#181C22"/>
+      <text x="573" y="431" text-anchor="middle" font-size="50" font-weight="600" fill="#F5F2EB">Agent</text>
+      <text x="573" y="480" text-anchor="middle" font-size="32" fill="#A6ADB8">查询 · 执行 · 回读</text>
+      <path d="M736 442h69m-12-12 12 12-12 12" fill="none" stroke="#C6F184" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="828" y="370" width="308" height="142" rx="8" fill="#C6F184"/>
+      <text x="982" y="431" text-anchor="middle" font-size="42" font-weight="700" fill="#0B0D11">巨量引擎</text>
+      <text x="982" y="480" text-anchor="middle" font-size="34" font-weight="600" fill="#26351D">MAPI</text>
+      <path d="M982 536v31H191v-31m382 31v-31" fill="none" stroke="#69717F" stroke-width="2"/>
+      <text x="573" y="614" text-anchor="middle" font-size="32" fill="#A6ADB8">返回数据与执行结果</text>
+    </g>
+    <g id="platforms" fill="#F5F2EB" font-size="38" font-weight="600">
+      <path d="M64 659h1072" stroke="#363B43"/>
+      <text x="64" y="716">千川</text>
+      <text x="428" y="716">随心推</text>
+      <text x="828" y="716">巨量本地推</text>
+    </g>
+  </g>
+</svg>
