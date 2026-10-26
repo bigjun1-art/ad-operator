@@ -1,4 +1,4 @@
 interface:
   display_name: "统一投流助手"
-  short_description: "通过对话操作千川和本地推，临时按需运行，明确授权后托管"
+  short_description: "主Skill统一千川、随心推、本地推三个子Skill，按需运行和明确授权托管"
   default_prompt: "使用 $ad-operator 查询指定账户并准备投流操作，不打开网页。"

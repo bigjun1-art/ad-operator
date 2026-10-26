@@ -1,0 +1,4 @@
+interface:
+  display_name: "本地推投流"
+  short_description: "查询本地推账户及标准对象，并执行明确授权的预算与启停"
+  default_prompt: "使用 $ad-operator-local 查询指定账户并按实际支持范围准备操作。"

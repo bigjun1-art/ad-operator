@@ -9,11 +9,23 @@ const option=values=>({type:'enum',values});
 const optional=rule=>({...rule,optional:true});
 const scope={range:optional(option(['realtime','yesterday','d7','d30','d90','custom'])),start:optional(fields.date),end:optional(fields.date)};
 const qcScope={...scope,dim:optional(option(['all','uni','overall','standard'])),scene:optional(option(['all','live','video']))};
+const suixinScope={...scope,dim:optional(option(['normal','uni'])),scene:optional(option(['all','live','video']))};
 const localScope={...scope,mgoal:optional(option(['all','LIVE','VIDEO_IMAGE'])),delivery:optional(option(['standard','manual','standard_manual','standard_auto']))};
 const entries=[];
 function add(platform,name,method,path,schema={},extra={}){entries.push({platform,name,method,path,schema,...extra});}
 add('qianchuan','accounts.list','GET','/api/accounts',{}, {accountRequired:false});
 add('local','accounts.list','GET','/api/local/accounts',{}, {accountRequired:false});
+add('suixin','accounts.list','GET','/api/suixin/accounts',{}, {accountRequired:false,note:'使用随心推应用自身授权发现，不借用千川PC账户授权。'});
+add('suixin','overview.get','GET','/api/suixin/overview',suixinScope,{queryDefaults:{dim:'normal',scene:'all'},note:'普通/商品全域分别查询；complete=false的结果不能用于托管触发。'});
+add('suixin','orders.list','GET','/api/suixin/orders',{scene:optional(option(['all','live','video']))},{queryDefaults:{scene:'all'},note:'普通随心推全量订单库存，不以计划ID替代订单ID。'});
+add('suixin','order.get','GET','/api/suixin/orders',{order_id:fields.id},{queryDefaults:{scene:'all'},note:'从当前随心推账户完整普通订单库存中定位精确order_id。'});
+add('suixin','uni.orders.list','GET','/api/suixin/uni_orders',{}, {queryDefaults:{scene:'video'},note:'当前全域订单库存仅商品类型；不混入普通订单终止接口。'});
+add('suixin','trend.get','GET','/api/suixin/trend',{...scope,scene:optional(option(['all','live','video']))},{queryDefaults:{dim:'normal',scene:'all'}});
+add('suixin','order.terminate','POST','/api/suixin/order/terminate',{order_id:fields.id},{preflight:'orders.list',destructive:true,note:'明确授权终止单个普通订单；不是暂停或恢复，不操作全域订单。'});
+add('suixin','suggest.roi.get','GET','/api/qianchuan/aweme/suggest_roi',{aweme_id:fields.id});
+add('suixin','suggest.bid.get','GET','/api/qianchuan/aweme/suggest_bid',{budget:{type:'positiveInteger'},external_action:optional(fields.text),audience_mode:optional(fields.text)},{note:'budget为原建议接口整数参数，不能在未核实单位时解释成可提交元金额。'});
+add('suixin','estimate.get','GET','/api/qianchuan/aweme/estimate_profit',{budget:{type:'positiveInteger'},marketing_goal:optional(option(['LIVE_PROM_GOODS','VIDEO_PROM_GOODS'])),external_action:optional(fields.text),bid_mode:optional(fields.text),audience_mode:optional(fields.text)},{note:'仅预估读取，保留原接口整数预算参数口径，不据此自动建单。'});
+add('suixin','uni.report.get','GET','/api/qianchuan/aweme/uni_promotion/order_report',scope,{note:'商品全域逐订单原始报表；不与普通订单报表混合。'});
 add('qianchuan','overview.get','GET','/api/overview',qcScope);
 add('local','overview.get','GET','/api/local/overview',localScope,{note:'仅标准投放；不将标准归因与全域成交合计。'});
 add('qianchuan','plans.list','GET','/api/command/plans',qcScope);
@@ -52,10 +64,10 @@ export const HEADLESS_LIMITATIONS=Object.freeze([
  '临时调用不开网页、不启后台盯盘、不会启动或恢复旧托管策略。',
 ]);
 export function getHeadlessAction(platform,name){const action=HEADLESS_ACTIONS.find(a=>a.platform===platform&&a.name===name);if(!action)fail('该平台没有已接入的动作：'+String(name),'HEADLESS_ACTION_UNAVAILABLE');return action;}
-export function describeHeadlessActions(platform){if(platform!==undefined&&!['qianchuan','local'].includes(platform))fail('平台须为qianchuan或local');return {actions:HEADLESS_ACTIONS.filter(a=>platform===undefined||a.platform===platform).map(a=>({...a,accountRequired:a.accountRequired!==false})),limitations:HEADLESS_LIMITATIONS};}
+export function describeHeadlessActions(platform){if(platform!==undefined&&!['qianchuan','suixin','local'].includes(platform))fail('平台须为qianchuan、suixin或local');return {actions:HEADLESS_ACTIONS.filter(a=>platform===undefined||a.platform===platform).map(a=>({...a,accountRequired:a.accountRequired!==false})),limitations:HEADLESS_LIMITATIONS};}
 function valid(rule,value){
  switch(rule.type){
-  case 'id':return id(value);case 'positive':return positive(value);case 'money':return money(value);
+  case 'id':return id(value);case 'positive':return positive(value);case 'positiveInteger':return positive(value)&&Number.isSafeInteger(value);case 'money':return money(value);
   case 'text':return typeof value==='string'&&value.length>0&&value.length<=100;
   case 'date':return typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
   case 'enum':return rule.values.includes(value);

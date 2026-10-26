@@ -1,11 +1,23 @@
 ---
 name: ad-operator
-description: "通过对话操作现有千川与巨量本地推后台：查询账户、报表和配置，准备及执行明确授权的预算、ROI、启停和素材操作；临时按需运行、不打开网页，只有用户明确开启连续监控或托管才持续运行。适用于实际投放管理，不用于广告文案创作。"
+description: "千川、随心推和巨量本地推的统一对话投流主Skill，路由到三个平台子Skill，查询真实账户、报表与配置并执行明确授权的已接入操作。临时按需运行、不打开网页，只有明确开启连续监控或托管才持续运行；不用于广告文案创作。"
 ---
 
 # 统一投流助手
 
 此技能复用本机现有投流工作台的 `headless-runtime.mjs`，不另建模拟账户或重新实现平台接口。它是现有后端的对话适配层；后端和广告授权需在本机配置。配置、账户与运行记录留在技能目录之外。
+
+## 三个平台子Skill
+
+先按用户实际业务选择子Skill，只读取本次需要的平台说明；不要把三个业务线的账户、对象、授权或ROI口径合并。
+
+| 用户对象 | 子Skill | 固定平台 |
+|---|---|---|
+| 千川标准报表、全域/乘方计划 | [ad-operator-qianchuan](subskills/ad-operator-qianchuan/SKILL.md) | `qianchuan` |
+| 随心推普通订单、商品全域订单与报表 | [ad-operator-suixin](subskills/ad-operator-suixin/SKILL.md) | `suixin` |
+| 巨量本地推标准项目/单元、账户日预算与历史受众 | [ad-operator-local](subskills/ad-operator-local/SKILL.md) | `local` |
+
+主入口保留统一的生命周期和授权处理，三个子入口把平台固定，跨平台任务分开发现授权、定位对象、准备及回读。子Skill可以独立发现使用，但不能覆盖平台参数把它改成另一个业务。随心推使用自身应用授权，即使账户ID与千川相同也不自动互认。
 
 ## 入口与动作选择
 
@@ -14,11 +26,12 @@ description: "通过对话操作现有千川与巨量本地推后台：查询账
 ```sh
 node scripts/ad.mjs doctor
 node scripts/ad.mjs actions qianchuan
+node scripts/ad.mjs actions suixin
 node scripts/ad.mjs actions local
 node scripts/ad.mjs describe account.budget.set --platform local
 ```
 
-平台只能为 `qianchuan` 或 `local`。以 `actions`、`describe` 实际输出选择动作和字段，不猜路径或沿用旧Skill中的废弃参数。参数通过标准输入传入JSON：`{"params":{...}}`。账户列表以外的动作必须明确单个精确账户ID，不依赖网页当前账户，不接受ALL账户。对象ID保持字符串。
+平台只能为 `qianchuan`、`suixin`或`local`。以 `actions`、`describe` 实际输出选择动作和字段，不猜路径或沿用旧Skill中的废弃参数。参数通过标准输入传入JSON：`{"params":{...}}`。账户列表以外的动作必须明确单个精确账户ID，不依赖网页当前账户，不接受ALL账户。对象ID保持字符串。命令路径相对主Skill目录；其他工作目录执行时使用脚本绝对路径。
 
 ## 临时查询与投放操作
 
@@ -39,6 +52,7 @@ node scripts/ad.mjs describe account.budget.set --platform local
 ## 关键口径
 
 - 千川官方支付ROI与实付金额/消耗计算值分别使用，不能混作目标达成判断；金额沿用后端核实后的单位和范围。
+- 随心推普通订单与商品全域订单分开，终止普通订单不等于暂停，不能借千川计划接口修改随心推订单；完整性不明的报表不触发托管动作。
 - 本地推账户日预算为元、两位小数；项目预算配置原值为分，详情会分别给出原值与元值。账户日预算不是全域整场预算。隔日提交不等于已生效。
 - 本地推全域受众属于T-1及以前的历史分析，直播查询必须明确当前账户授权的 `aweme_id`；它不是实时账户主报表。
 - 当前公开本地推MAPI没有已确认可用的全域对象预算、目标ROI和素材生命周期专用写入；全域启停与标准对象映射也未明确。不能用标准项目接口冒充，也不自动改走网页私有接口。

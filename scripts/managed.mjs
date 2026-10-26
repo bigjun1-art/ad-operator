@@ -45,12 +45,14 @@ export async function reconcileManaged(config,id){
  for(const a of state.actions.filter(unresolvedAction)){
   const p=a.action.params,name=a.action.name;let action,params={},matches=false;
   if(name.startsWith('plan.')){action='plan.detail';params={ad_id:p.ad_id};}
+  else if(name==='order.terminate'){action='order.get';params={order_id:p.order_id};}
   else if(name==='project.budget.set'){action='project.detail';params={project_id:p.project_id};}
   else if(name==='project.status.set')action='projects.list';else if(name==='promotion.status.set')action='promotions.list';else if(name==='account.budget.set')action='account.budget.get';else continue;
   const result=await invokeBackend(config,{mode:'read',platform:policy.platform,accountId:policy.accountId,action,params}),d=result.data;
   if(name==='plan.budget.set')matches=num(d.delivery_setting?.budget)===p.budget;
   else if(name==='plan.roi.set')matches=num(d.delivery_setting?.roi2_goal)===p.roi2_goal;
   else if(name==='plan.status.set')matches=d.opt_status===p.opt_status;
+  else if(name==='order.terminate')matches=d.mode==='normal'&&String(d.order?.order_id||'')===p.order_id&&['FROZEN','FINISHED','OVER','TIMEOUT','UNPAIDCANCEL'].includes(d.order?.status);
   else if(name==='project.budget.set')matches=num(d.budget_yuan)===p.budget&&d.budget_mode===p.budget_mode;
   else if(name==='account.budget.set'){
    if(p.effective_mode==='EFFECTIVE_NEXT_DAY'){

@@ -20,6 +20,21 @@ test('official ROI absence does not substitute a cash return value',async()=>{
  let writes=0;const p=policy();p.rules[0].metric='payment_roi';p.rules[0].operator='lte';p.rules[0].threshold=2;
  const r=createManagedRunner(p,{read:async()=>result({payment_roi:null}),prepare:async()=>({}),execute:async()=>{writes++;}});await r.tick();assert.equal(writes,0);
 });
+test('Suixin continuous rules bind ordinary order IDs and never use PC plan operations',async()=>{
+ const p=policy({platform:'suixin',scope:{dim:'normal',scene:'video'},allowedActions:['order.terminate'],entityIds:[fixturePlan],rules:[{id:'end-order',metric:'cost',operator:'gte',threshold:100,action:{name:'order.terminate',params:{order_id:fixturePlan}}}]});delete p.maxSingleBudget;
+ let writes=0;const r=createManagedRunner(p,{read:async()=>({...result(),data:{...result().data,complete:true,mode:'normal',monetaryVerification:{unitKnown:true}}}),prepare:async()=>({}),execute:async()=>{writes++;return {ok:true,data:{verified:true,status:'verified'}};}});await r.tick();await r.tick();assert.equal(writes,1);
+ assert.throws(()=>validateManagedPolicy({...p,scope:{dim:'uni',scene:'video'}}));assert.throws(()=>validateManagedPolicy({...p,allowedActions:['plan.status.set']}));
+});
+test('unconfirmed Suixin money cannot satisfy a yuan cost boundary; count-only termination keeps its separate scope',async()=>{
+ const p=policy({platform:'suixin',scope:{dim:'normal',scene:'video'},allowedActions:['order.terminate'],rules:[{id:'end-order',metric:'orders',operator:'gte',threshold:1,action:{name:'order.terminate',params:{order_id:fixturePlan}}}]});let writes=0;
+ const deps={read:async()=>({ok:true,data:{complete:true,summary:{cost:100000,orders:2},monetaryVerification:{unitKnown:false}}}),prepare:async()=>({}),execute:async()=>{writes++;return {ok:true,data:{verified:true}};}};
+ const guarded=createManagedRunner(p,deps);await guarded.tick();assert.equal(writes,0);assert.equal(guarded.state.status,'read_error');
+ delete p.maxObservedCost;const countOnly=createManagedRunner(p,deps);await countOnly.tick();assert.equal(writes,1);
+});
+test('an incomplete Suixin response cannot trigger a rule even when amounts are present',async()=>{
+ const p=policy({platform:'suixin',scope:{dim:'normal',scene:'video'},allowedActions:['order.terminate'],rules:[{id:'end-order',metric:'cost',operator:'gte',threshold:100,action:{name:'order.terminate',params:{order_id:fixturePlan}}}]});let writes=0;
+ const r=createManagedRunner(p,{read:async()=>({ok:true,data:{complete:false,summary:{cost:200,orders:1},limitations:['范围不完整']}}),prepare:async()=>({}),execute:async()=>writes++});await r.tick();assert.equal(writes,0);assert.equal(r.state.status,'read_error');
+});
 test('expiration while preparing cancels mutation, without touching ads',async()=>{
  let clock=Date.now(),writes=0;const p=policy({expiresAt:new Date(clock+1000).toISOString()});const r=createManagedRunner(p,{now:()=>clock,read:async()=>result(),prepare:async()=>{clock+=2000;return {};},execute:async()=>writes++});await r.tick();assert.equal(writes,0);assert.equal(r.state.status,'expired');
 });

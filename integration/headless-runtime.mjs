@@ -47,7 +47,7 @@ export async function withTemporaryBackend(run,{loadBackend,timeoutMs=120000}={}
  }
 }
 async function authorizedAccount(request,platform,accountId){
- const data=await request({path:platform==='local'?'/api/local/accounts?workbench=local':'/api/accounts?workbench=qianchuan'});
+ const data=await request({path:platform==='local'?'/api/local/accounts?workbench=local':platform==='suixin'?'/api/suixin/accounts?workbench=suixin':'/api/accounts?workbench=qianchuan'});
  const rows=platform==='local'?data?.accounts:data?.tree?.flatMap(group=>group.children||[]);
  if(!Array.isArray(rows))throw error('授权账户列表未完整取得','HEADLESS_ACCOUNT_DISCOVERY');
  const match=rows.find(row=>String(platform==='local'?row.local_account_id:row.id)===accountId);
@@ -58,7 +58,15 @@ function preflightParams(action,params){
  if(action.preflight==='project.detail')return {project_id:params.project_id};return {};
 }
 const numberOrNull=value=>['number','string'].includes(typeof value)&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
-function readableData(platform,action,data){
+function readableData(platform,action,data,params={}){
+ if(platform==='suixin'&&(action==='overview.get'&&data?.mode==='normal'||action==='trend.get')){
+  return {...data,money_units:{cost:'platform_raw_unit_unconfirmed',gmv:'platform_raw_unit_unconfirmed'},monetaryVerification:{unitKnown:false,source:'https://open.oceanengine.com/labels/12/docs/1754616243989519',reason:'当前普通随心推公开报表正文未注明金额单位；原值保留，不当作元金额用于自动规则。'}};
+ }
+ if(platform==='suixin'&&action==='order.get'){
+  const rows=data?.list?.filter(row=>String(row.order_id||'')===params.order_id);
+  if(!Array.isArray(rows)||rows.length!==1)throw error('未从当前账户的普通订单库存中唯一定位该order_id','HEADLESS_OBJECT_UNAUTHORIZED');
+  return {order:rows[0],mode:'normal',complete:data.complete===true};
+ }
  if(platform==='qianchuan'&&action==='balance.get'){
   const raw=numberOrNull(data?.account_general_total);return {balance_yuan:raw===null?null:raw/100000,source_field:'account_general_total',source_unit:'thousandth_fen',divisor:100000,raw_account_general_total:raw};
  }
@@ -73,7 +81,7 @@ export async function runHeadless(input,{withBackend=withTemporaryBackend,now=Da
  return withBackend(async({request})=>{
   const account=definition.accountRequired===false?null:await authorizedAccount(request,platform,accountId);
   const route=headlessRoute(normalized);
-  if(mode==='read')return {ok:true,mode,platform,accountId:accountId??null,action:input.action,data:readableData(platform,input.action,await request(route)),runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
+  if(mode==='read')return {ok:true,mode,platform,accountId:accountId??null,action:input.action,data:readableData(platform,input.action,await request(route),params),runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
   const preflightDefinition=getHeadlessAction(platform,definition.preflight),before=readableData(platform,definition.preflight,await request(headlessRoute({...normalized,definition:preflightDefinition,params:preflightParams(definition,params)})));
   if(definition.name==='account.budget.set'&&(before.budget_mode!==params.expected.budget_mode||before.budget!==params.expected.budget))throw error('账户预算已变化，请重新读取并确认','HEADLESS_STALE');
   if(definition.name==='materials.remove'&&(!Array.isArray(before)||params.material_ids.some(id=>!before.some(row=>String(row.material_id)===id))))throw error('待移除素材未全部出现在该账户计划的完整素材列表中','HEADLESS_OBJECT_UNAUTHORIZED');
@@ -81,11 +89,24 @@ export async function runHeadless(input,{withBackend=withTemporaryBackend,now=Da
    const key=definition.name.startsWith('project.')?'project':'promotion',rows=before[key+'_list'];
    if(!Array.isArray(rows)||params.data.some(row=>!rows.some(current=>String(current[key+'_id'])===row[key+'_id'])))throw error('操作对象不在所选账户的当前完整配置列表中','HEADLESS_OBJECT_UNAUTHORIZED');
   }
+  let normalOrder;
+  if(platform==='suixin'&&definition.name==='order.terminate'){
+   const matches=before?.list?.filter(row=>String(row.order_id||'')===params.order_id);
+   if(before?.complete!==true||!Array.isArray(matches)||matches.length!==1)throw error('终止目标不在当前随心推账户的完整普通订单库存中，不能用计划或全域ID代替','HEADLESS_OBJECT_UNAUTHORIZED');
+   normalOrder=matches[0];
+  }
   const prepared={platform,accountId,action:input.action,params,accountName:account?.name||account?.account_name||account?.local_account_name||accountId,before,intentHash:headlessIntentHash(normalized),request:route,destructive:definition.destructive===true};
   if(mode==='prepare')return {ok:true,mode,submitted:false,prepared,runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
   // Reads can outlive the approval window; validate again at the write boundary.
   assertHeadlessAuthorization(normalized,{now:now()});
+  const ended=new Set(['FROZEN','FINISHED','OVER','TIMEOUT','UNPAIDCANCEL']);
+  if(normalOrder&&ended.has(normalOrder.status))return {ok:true,mode,platform,accountId,action:input.action,executionAttempted:false,data:{verified:true,unchanged:true,submitted:false,observedOrderStatus:normalOrder.status,orderId:params.order_id},runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
   let data=await request({...route,writeDeadline:Date.parse(normalized.authorization.expiresAt)});
+  if(normalOrder){
+   const accepted=Array.isArray(data?.order_ids)&&data.order_ids.some(id=>String(id)===params.order_id);
+   let observed=null;try{const after=await request(headlessRoute({...normalized,definition:preflightDefinition,params:{}}));observed=after?.list?.find(row=>String(row.order_id||'')===params.order_id)?.status??null;}catch{}
+   data={status:accepted&&ended.has(observed)?'verified':'unknown',verified:accepted&&ended.has(observed),receiptAccepted:accepted,orderId:params.order_id,observedOrderStatus:observed,platformReceipt:data};
+  }
   if(definition.name==='materials.remove'){
    try{const after=await request(headlessRoute({...normalized,definition:preflightDefinition,params:preflightParams(definition,params)}));
     if(!Array.isArray(after)||params.material_ids.some(id=>after.some(row=>String(row.material_id)===id)))throw Error('目标素材仍在返回列表中');

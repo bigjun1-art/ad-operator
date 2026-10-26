@@ -1,0 +1,4 @@
+interface:
+  display_name: "随心推投流"
+  short_description: "独立查询随心推授权和订单，并执行明确授权的普通订单终止"
+  default_prompt: "使用 $ad-operator-suixin 查询指定账户并按实际支持范围准备操作。"

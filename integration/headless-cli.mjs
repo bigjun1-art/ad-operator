@@ -10,7 +10,7 @@ export async function headlessMain(argv=process.argv.slice(2),{stdin=process.std
  const print=v=>stdout.write(JSON.stringify(v,null,2)+'\n');
  try{
   const [command,possibleAction,...tail]=argv;
-  if(!command||['help','--help','-h'].includes(command)){print({commands:['actions [--platform qianchuan|local]','describe ACTION --platform PLATFORM','doctor','read ACTION --platform PLATFORM --account ID','prepare ACTION --platform PLATFORM --account ID','execute ACTION --platform PLATFORM --account ID --authorization-file FILE'],params:'read/prepare/execute参数从stdin传入一个JSON对象；账户列表可省略account。',authorization:'execute的授权文件须来自当前会话明确用户指令，绑定platform/accountId/action/intentHash/expiresAt；文件本身不证明真人授权。',temporary:'每次调用使用独立随机本机端口，finally关闭；不打开网页、不启后台、不恢复旧策略。'});return 0;}
+  if(!command||['help','--help','-h'].includes(command)){print({commands:['actions [--platform qianchuan|suixin|local]','describe ACTION --platform PLATFORM','doctor','read ACTION --platform PLATFORM --account ID','prepare ACTION --platform PLATFORM --account ID','execute ACTION --platform PLATFORM --account ID --authorization-file FILE'],params:'read/prepare/execute参数从stdin传入一个JSON对象；账户列表可省略account。',authorization:'execute的授权文件须来自当前会话明确用户指令，绑定platform/accountId/action/intentHash/expiresAt；文件本身不证明真人授权。',temporary:'每次调用使用独立随机本机端口，finally关闭；不打开网页、不启后台、不恢复旧策略。'});return 0;}
   const action=possibleAction?.startsWith('--')?undefined:possibleAction,args=action?tail:[possibleAction,...tail].filter(Boolean),options={};
   for(let i=0;i<args.length;i+=2){if(!['--platform','--account','--authorization-file','--timeout-ms'].includes(args[i])||!args[i+1]||Object.hasOwn(options,args[i]))throw Error('无效或重复的CLI参数');options[args[i]]=args[i+1];}
   const platform=options['--platform'];

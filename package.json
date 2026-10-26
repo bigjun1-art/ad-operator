@@ -1,9 +1,8 @@
 {
   "name": "ad-operator",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.0",
   "type": "module",
-  "description": "Conversation adapter for an existing Qianchuan and local delivery backend",
+  "description": "Unified conversation skill with Qianchuan, Suixin and Local Delivery subskills",
   "engines": {
     "node": ">=24"
   },
