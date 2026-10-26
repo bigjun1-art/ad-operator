@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
+  <title id="title">统一入口与三个平台子 Skill</title>
+  <desc id="desc">统一投流主 Skill 将用户指令分流到千川、随心推和本地推子 Skill。各平台独立识别授权与对象，共用执行核心。</desc>
+  <rect width="1200" height="440" rx="20" fill="#101b29"/>
+  <g id="routing" fill="none" stroke="#66d4bf" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M406 220H514M514 105V335M514 105H586M514 220H586M514 335H586"/>
+    <path d="m575 94 11 11-11 11m0 93 11 11-11 11m0 93 11 11-11 11"/>
+  </g>
+  <g id="main-skill" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif">
+    <rect x="52" y="143" width="354" height="154" rx="16" fill="#1c3043" stroke="#66d4bf" stroke-width="2"/>
+    <text x="229" y="211" text-anchor="middle" font-size="51" font-weight="700" fill="#f4f8fc">统一投流</text>
+    <text x="229" y="265" text-anchor="middle" font-size="40" fill="#b5c8da">主 Skill</text>
+  </g>
+  <g id="platform-skills" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif" font-size="50" font-weight="600" fill="#f4f8fc">
+    <rect x="608" y="57" width="540" height="96" rx="12" fill="#1c3043"/>
+    <rect x="608" y="172" width="540" height="96" rx="12" fill="#1c3043"/>
+    <rect x="608" y="287" width="540" height="96" rx="12" fill="#1c3043"/>
+    <text x="878" y="123" text-anchor="middle">千川</text>
+    <text x="878" y="238" text-anchor="middle">随心推</text>
+    <text x="878" y="353" text-anchor="middle">本地推</text>
+  </g>
+</svg>
