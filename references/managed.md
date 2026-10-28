@@ -1,8 +1,20 @@
-# 持续运行
+# 持续监控与托管
 
-`managed validate`只校验政策，不启动；`managed start --confirm-managed`在用户明确授权后持续运行；`managed status SESSION_ID`查询，`managed reconcile SESSION_ID`在停止后只读核实未明动作；`managed stop SESSION_ID`停止所属进程及临时子进程。没有安装定时任务、登录启动项或系统服务。
+用户明确开启持续盯盘或托管后启动进程，绑定账户、对象、允许动作、金额及期限。`recommend` 定时生成建议，`managed` 按事先授权的规则执行。
 
-启动输入包含以下内容。以下是结构说明，必须用用户已明确同意的真实值填写，不可以直接启动占位示例：
+```sh
+node scripts/ad.mjs managed validate
+node scripts/ad.mjs managed start --confirm-managed
+node scripts/ad.mjs managed status SESSION_ID
+node scripts/ad.mjs managed stop SESSION_ID
+node scripts/ad.mjs managed reconcile SESSION_ID
+```
+
+`validate`只检查输入，`start`接受标准输入中的完整策略，`reconcile`在会话停止后通过只读请求核对未明动作。运行状态保存在本机配置的 `stateRoot`。
+
+## 千川跟踪对象
+
+千川新增 `monitor`，示例为结构说明，使用前填入用户确定的实际值：
 
 ```json
 {
@@ -10,39 +22,75 @@
   "accountId": "ACCOUNT_ID",
   "mode": "recommend",
   "explicitManagedAuthorization": false,
-  "userInstruction": "用户本人明确的持续监控或托管指令",
+  "userInstruction": "用户本人明确的持续监控指令",
   "expiresAt": "FUTURE_ISO_TIME",
   "intervalSeconds": 60,
-  "scope": {"dim":"all","scene":"video"},
+  "monitor": {
+    "level": "material",
+    "scene": "video",
+    "period": "chengfang",
+    "ad_id": "PLAN_ID",
+    "material_id": "MATERIAL_ID"
+  },
   "entityIds": ["PLAN_ID"],
-  "allowedActions": ["plan.status.set"],
+  "taskIds": ["TASK_ID"],
+  "materialIds": ["MATERIAL_ID"],
+  "allowedActions": ["boost.status.set"],
   "maxObservedCost": 1000,
-  "maxSingleBudget": 500,
   "maxActionsPerDay": 3,
+  "minActionIntervalSeconds": 900,
   "rules": [{
-    "id":"pause-at-threshold",
-    "metric":"cost","operator":"gte","threshold":800,
-    "action":{"name":"plan.status.set","params":{"ad_id":"PLAN_ID","opt_status":"DISABLE"}}
+    "id": "pause-task",
+    "metric": "marketing_roi",
+    "operator": "lte",
+    "threshold": 2,
+    "consecutiveObservations": 3,
+    "minObservationSeconds": 180,
+    "action": {
+      "name": "boost.status.set",
+      "params": {"ad_id":"PLAN_ID","task_id":"TASK_ID","opt_type":"PAUSE","requestKey":"USER_INTENT_KEY"}
+    }
   }]
 }
 ```
 
-`recommend`只保存准备好的建议，等待用户通过普通execute操作批准；`managed`在同一份明确授权的范围内执行固定规则。每条规则每个会话最多触发一次；完成所有规则后退出，不循环重复调整。需要重新制定规则时先停原会话，再取得新授权，不能自行延长截止时间或增加对象。
+示例金额、目标、次数和间隔由用户实际要求替换。`entityIds`绑定允许操作的计划，`taskIds`和`materialIds`分别绑定任务及素材。创建或修改追投预算还需要 `maxSingleBudget` 和 `maxAdditionalBudget`；追加总额计算已创建、待核实及结果未知动作的预算占用。
 
-支持的托管动作：千川计划预算、ROI、启停；随心推已明确授权的普通订单终止；本地推标准项目预算、项目/单元启停和账户日预算。素材删除不放入自动托管。只有平台接口和实际字段支持的动作才可执行，普通Skill支持某个手动动作不代表可放入托管。
+`monitor.level`为账户`account`、商品计划`plan`、直播主播`anchor`、素材`material`或追投任务`task`。单素材需同时给出计划和素材ID，任务需计划和任务ID。直播按主播统计，使用`anchor_id`绑定。
 
-随心推持续监控限定`scope.dim="normal"`及明确的`scene`，对象列表中放普通`order_id`，允许动作只为`order.terminate`。这是一项终止操作，没有恢复动作；用户只说暂停时不擅自改为终止。随心推商品全域与直播全域不能借这个普通接口终止。返回`complete=false`时，即使存在部分金额也不触发规则。
+`period`选择`chengfang/uni/combined`。乘方期间使用官方`marketing_roi`或明确选择的`calculated_marketing_roi`；全域期间使用支付或净成交ROI。整体期间按消耗、订单及流速制定规则。
 
-普通随心推金额单位尚未在当前公开正文中直接明确，查询会附未核实标记，不将非明确元金额用于成本阈值或用户的金额边界。当前可运行明确的订单数终止规则：用户未设置金额边界时才可省略`maxObservedCost`，且规则指标只能为`orders`。用户已经给出的金额条件不能为了启动而删去；有这类条件而单位未核时保持阻断，待核实单位后再执行。
+## 指标与观察窗口
 
-本地推持续监控限定 `scope.dim="standard"`，可按动作定义设置 `mgoal` 和 `delivery`。不把全域T-1历史受众当作实时流速；缺失的官方ROI不会回退为现金比值。监控范围必须向用户说明：千川 `all` 指整体但不含标准，不能将这个范围的成本称作全平台账户总消耗。
+比较符使用 `gt/lt` 表示严格大于/小于，`gte/lte` 表示大于等于/小于等于，`eq/neq` 表示等于/不等于。
 
-可用规则指标为 `cost`、`orders`、`payment_roi`、`net_roi`、`cash_return_ratio`。后两种ROI字段与计算值不能互换；指标缺失时不触发相应规则。15秒是本工具允许的最短轮询间隔，并非官方延迟或频控承诺。
+可用指标包括消耗`cost`、订单`orders`、官方支付ROI`payment_roi`、官方净成交ROI`net_roi`、实付金额/消耗`cash_return_ratio`、综合营销ROI及具名计算值、单素材CTR，以及消耗/订单增量和每分钟增量。
 
-`maxObservedCost`是所选监控范围的成本边界，不是平台计费上限。达到后不再执行加预算或调ROI，只允许已经明确授权且命中的暂停动作或随心推普通订单终止，然后停止本技能。没有这类规则时不会擅自暂停或终止广告。实际账户预算应通过平台预算接口另行设置。
+连续完整快照按同一账户、对象、期间和成本口径计算增量。更换对象、切换期间或产品、跨统计日、累计数据回落时重新开始观察窗口。指标缺失中断该规则的连续命中计数。
 
-金额动作不得超过 `maxSingleBudget`；托管解除账户日预算上限还需要政策明确 `allowUnlimitedBudget:true`，并有用户对该效果的明确授权。`maxActionsPerDay`统计本技能当前会话内的动作，不代表平台账户所有来源的操作总量。原值或配置变化导致准备失败时保留错误，不猜新预算。
+- `consecutiveObservations`：连续达到条件的轮数。
+- `minObservationSeconds`：基线建立后最短观察时间。
+- `minActionIntervalSeconds`：本会话已执行动作之间的冷却时间。
+- `maxChangePercent`：数值动作相对当前原值的调整比例上限。
 
-写入前保存动作状态，回执不明、隔日待核实、只有受理回执或明确拒绝时停止后续执行，不自动重发。查看实际配置与原操作记录后再决定如何处理。进程崩溃后不会自动恢复旧托管；未知动作必须先核实。
+查询间隔为15～3600秒。每条规则在一次会话最多触发一次；规则完成、用户叫停或授权到期后退出。官方数据的统计周期和更新状态随查询结果保留。
 
-状态与日志保存在本地 `stateRoot`，不进入GitHub。停止命令会核对PID、工作脚本、会话路径和进程标识，只停止自己启动的进程。托管停止、规则完成或授权到期，均不代表广告本身已经暂停。
+## 支持的动作
+
+千川支持计划预算、ROI、启停，以及授权的追投创建、修改和状态操作。素材移除通过单次明确授权执行。乘方托管创建使用该计划、产品类型、场景和目标已有的成功创建及精确回读记录；证据保存在私人任务回执目录。
+
+追投任务的`PAUSE`表示暂停、`ENABLE`表示开启、`DISABLE`表示手动结束。暂停成功ID记录为受理，最终状态未明确时停止后续规则。用户明确开启或结束同一任务后，精确回读的新状态可将原暂停请求标记为被替代。
+
+任务指标保留任务合计。用户未设置金额条件、只允许暂停或结束任务时，可按任务订单数或任务ROI监控；金额阈值使用已有单位核验结果的计划或素材报表。
+
+本地推连续监控限定标准投放的明确`mgoal/delivery`范围，允许标准项目预算、项目和单元启停及账户日预算。随心推连续监控限定普通订单`scope.dim=normal`和明确`scene`，执行对象为普通`order_id`，允许终止订单。随心推金额单位状态为未知时，用户未设置金额边界的订单数规则可运行。
+
+## 金额和生命周期
+
+`maxObservedCost`限制所选监控范围的观察成本。达到后，停止新增预算和ROI调整，仅执行已授权且命中条件的暂停或结束动作，然后退出。实际平台预算通过对应预算动作设置。
+
+`maxSingleBudget`限制单次目标预算。`maxActionsPerDay`统计本会话执行次数；账户日预算解除上限还需`allowUnlimitedBudget:true`及用户对该效果的明确授权。
+
+准备结果记录当前配置指纹，执行时在持锁读取和最终提交前核对原值；配置变化时以未提交状态退出，重新读取和计算额度。写入前保存动作，执行边界再次检查有效期。回执未知、只有受理结果或隔日待生效时停止后续写入，按原回执查询核对。进程停止后保留原记录；新会话重新取得用户授权。
+
+停止托管关闭所属进程及临时后台。广告启停按用户对具体投放对象的指令执行。

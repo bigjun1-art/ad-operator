@@ -5,6 +5,7 @@ import {createHash} from 'node:crypto';
 import {createManagedRunner,newManagedState,validateManagedPolicy,unresolvedAction} from './managed-core.mjs';
 import {invokeBackend,redactError} from './config.mjs';
 import {saveJson} from './managed.mjs';
+import {monitorReadRequest} from './managed-observation.mjs';
 const [directory,nonce]=process.argv.slice(2);
 if(!directory||!nonce)throw Error('托管进程缺少会话标识');
 const config=JSON.parse(await readFile(path.join(directory,'config.json'),'utf8'));
@@ -28,13 +29,13 @@ try{
   const recovery=lock+'.recovery';await mkdir(recovery,{mode:0o700});
   try{const current=JSON.parse(await readFile(lock,'utf8'));if(current.nonce!==old.nonce)throw Error('账户锁已变化，未启动托管');await renameLock(lock);await writeFile(lock,JSON.stringify({pid:process.pid,nonce,directory}),{flag:'wx',mode:0o600});acquired=true;}finally{await rm(recovery,{recursive:true,force:true});}
  }
- runner=createManagedRunner(policy,{read:({platform,accountId,scope})=>invokeBackend(config,{mode:'read',action:'overview.get',platform,accountId,params:platform==='local'?{range:'realtime',...(scope.mgoal?{mgoal:scope.mgoal}:{}),...(scope.delivery?{delivery:scope.delivery}:{})}:scope},{signal:controller.signal}),
+ runner=createManagedRunner(policy,{read:()=>invokeBackend(config,monitorReadRequest(policy),{signal:controller.signal}),
   prepare:a=>invokeBackend(config,{mode:'prepare',platform:policy.platform,accountId:policy.accountId,action:a.name,params:a.params},{signal:controller.signal}),
   execute:async(a,prepared)=>{
    const plan=prepared.prepared;if(!plan||plan.platform!==policy.platform||plan.accountId!==policy.accountId||plan.action!==a.name)throw Error('准备结果与托管授权不一致');
    const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date()),midnight=Date.parse(day+'T00:00:00+08:00')+86400000;
    const expiresAt=new Date(Math.min(Date.parse(policy.expiresAt),midnight)).toISOString();
-   return invokeBackend(config,{mode:'execute',platform:policy.platform,accountId:policy.accountId,action:a.name,params:a.params,authorization:{authorized:true,basis:'explicit_user_instruction',platform:policy.platform,accountId:policy.accountId,action:a.name,intentHash:plan.intentHash,expiresAt,userInstruction:policy.userInstruction}},{signal:controller.signal});
+   return invokeBackend(config,{mode:'execute',platform:policy.platform,accountId:policy.accountId,action:a.name,params:a.params,authorization:{authorized:true,basis:'explicit_user_instruction',platform:policy.platform,accountId:policy.accountId,action:a.name,intentHash:plan.intentHash,expiresAt,userInstruction:policy.userInstruction,executionMode:'managed',...(plan.preconditionHash?{preconditionHash:plan.preconditionHash}:{})}},{signal:controller.signal});
   },persist});
  while(!stopping){
   const state=await runner.tick();

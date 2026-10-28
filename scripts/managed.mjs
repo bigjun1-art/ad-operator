@@ -14,7 +14,7 @@ async function ownedProcess(record,directory){
  if(!Number.isSafeInteger(record?.pid)||record.pid<1)return false;
  try{const {stdout}=await exec('ps',['-p',String(record.pid),'-o','command=']);return stdout.includes(worker)&&stdout.includes(directory)&&stdout.includes(record.nonce);}catch{return false;}
 }
-export async function managedStatus(config,id){const directory=sessionPath(config,id),record=JSON.parse(await readFile(path.join(directory,'process.json'),'utf8')),state=JSON.parse(await readFile(path.join(directory,'state.json'),'utf8'));const running=await ownedProcess(record,directory);return {sessionId:id,...state,...(!running&&['starting','running','read_error'].includes(state.status)?{status:state.actions?.some(unresolvedAction)?'needs_reconciliation':'stopped_unexpectedly'}:{}),processRunning:running};}
+export async function managedStatus(config,id){const directory=sessionPath(config,id),record=JSON.parse(await readFile(path.join(directory,'process.json'),'utf8')),state=JSON.parse(await readFile(path.join(directory,'state.json'),'utf8'));const running=await ownedProcess(record,directory);return {sessionId:id,...state,...(!running&&['starting','running','read_error','cooldown','day_boundary_recheck'].includes(state.status)?{status:state.actions?.some(unresolvedAction)?'needs_reconciliation':'stopped_unexpectedly'}:{}),processRunning:running};}
 export async function startManaged(config,policy,{confirmed=false}={}){
  const checked=validateManagedPolicy(policy);if(!confirmed)throw Error('启动常驻需要明确的 --confirm-managed，并来自用户本轮开启托管的指令');
  const {normalizeHeadlessRequest}=await import(pathToFileURL(path.join(config.backendRoot,'headless-actions.mjs')));
@@ -44,12 +44,17 @@ export async function reconcileManaged(config,id){
  const num=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
  for(const a of state.actions.filter(unresolvedAction)){
   const p=a.action.params,name=a.action.name;let action,params={},matches=false;
-  if(name.startsWith('plan.')){action='plan.detail';params={ad_id:p.ad_id};}
+  if(name.startsWith('boost.')){action='boost.receipt.get';params={ad_id:p.ad_id,requestKey:p.requestKey,...(p.range?{range:p.range}:{}),...(p.start?{start:p.start}:{}),...(p.end?{end:p.end}:{})};}
+  else if(name.startsWith('plan.')){action='plan.detail';params={ad_id:p.ad_id};}
   else if(name==='order.terminate'){action='order.get';params={order_id:p.order_id};}
   else if(name==='project.budget.set'){action='project.detail';params={project_id:p.project_id};}
   else if(name==='project.status.set')action='projects.list';else if(name==='promotion.status.set')action='promotions.list';else if(name==='account.budget.set')action='account.budget.get';else continue;
   const result=await invokeBackend(config,{mode:'read',platform:policy.platform,accountId:policy.accountId,action,params}),d=result.data;
-  if(name==='plan.budget.set')matches=num(d.delivery_setting?.budget)===p.budget;
+  if(name==='boost.status.set'&&d.status==='superseded'&&d.accountId===policy.accountId&&d.ad_id===p.ad_id&&d.requestKey===p.requestKey&&d.task_id===p.task_id&&typeof d.supersededBy==='string'){
+   a.status='superseded';a.reconciledAt=new Date().toISOString();a.resolvedBy=d.supersededBy;continue;
+  }
+  if(name.startsWith('boost.'))matches=d.status==='verified'&&d.accountId===policy.accountId&&d.ad_id===p.ad_id&&d.requestKey===p.requestKey&&(!p.task_id||d.task_id===p.task_id);
+  else if(name==='plan.budget.set')matches=num(d.delivery_setting?.budget)===p.budget;
   else if(name==='plan.roi.set')matches=num(d.delivery_setting?.roi2_goal)===p.roi2_goal;
   else if(name==='plan.status.set')matches=d.opt_status===p.opt_status;
   else if(name==='order.terminate')matches=d.mode==='normal'&&String(d.order?.order_id||'')===p.order_id&&['FROZEN','FINISHED','OVER','TIMEOUT','UNPAIDCANCEL'].includes(d.order?.status);

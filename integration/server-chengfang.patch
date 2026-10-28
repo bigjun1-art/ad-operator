@@ -1,0 +1,104 @@
+--- a/server.mjs
++++ b/server.mjs
+@@ -12,6 +12,9 @@
+  * - 写操作（启停/改ROI/删素材）前端弹窗列出清单，用户确认后才调后端执行。
+  */
+ import http from "node:http";
++import {homedir} from 'node:os';
++import {createChengfangHandler} from './chengfang-http.mjs';
++import {createChengfangTaskStore} from './chengfang-task-store.mjs';
+ import {guardPreviewTransport,assertPreviewUpstream,previewHtml} from './readonly-preview-policy.mjs';
+ import {createReadonlyPreviewHandler} from './readonly-preview-server.mjs';
+ const READONLY_PREVIEW=process.env.WORKBENCH_READONLY_PREVIEW==='1';
+@@ -1660,7 +1663,7 @@
+   if (!body || typeof body !== "object" || Array.isArray(body)) throw Object.assign(new Error("请求必须为对象"),{statusCode:400});
+   const ctx=requestContext.getStore();
+   const parsedURL=new URL(req.url,"http://127.0.0.1"), route=parsedURL.pathname;
+-  if(route.startsWith("/api/plan/") || route === "/api/material/delete") {
++  if(route.startsWith("/api/plan/") || route.startsWith('/api/chengfang/') || route === "/api/material/delete") {
+     if(body.advertiser_id != null && String(body.advertiser_id)!==String(ctx.advertiser_id)) throw Object.assign(new Error("请求账户与页面账户不一致，请重新加载后操作"),{statusCode:409});
+     const tree=await getAccountTree();
+     if(!tree.tree.some(group=>group.children.some(a=>String(a.id)===ctx.advertiser_id))) throw Object.assign(new Error("目标账户不在当前授权列表"),{statusCode:403});
+@@ -1930,6 +1933,15 @@
+   const tree=await getAccountTree(false,platform==='suixin'?'suixin':'qianchuan_pc');return tree.tree.flatMap(group=>group.children).find(a=>String(a.id)===id)||null;
+  }
+ }):null;
++const chengfangHandler=createChengfangHandler({
++ get:(p,query)=>apiGet(p,{advertiserId:currentAdv(),app:'qianchuan_pc',query,allPages:false,fresh:true}),
++ post:(p,body)=>apiPost(p,{advertiserId:currentAdv(),app:'qianchuan_pc',body}),
++ taskStore:createChengfangTaskStore({root:process.env.AD_OPERATOR_TASK_STATE_DIR||path.join(homedir(),'.local','state','ad-operator','task-receipts')}),
++ authorize:async id=>(await getAccountTree()).tree.some(g=>g.children.some(a=>String(a.id)===id)),readBody,currentAccount:currentAdv,resolveRange,
++ deadline:()=>requestContext.getStore()?.headlessWriteDeadline,
++ executionMode:()=>requestContext.getStore()?.headlessManaged===true?'managed':'manual',
++ precondition:()=>requestContext.getStore()?.headlessPrecondition,
++});
+ const server = http.createServer((req, res) => {
+   if(process.env.WORKBENCH_HEADLESS_KEY&&req.headers['x-workbench-headless-key']!==process.env.WORKBENCH_HEADLESS_KEY)return fail(res,403,'此临时后台仅接受所属对话进程的请求');
+   let headlessWriteDeadline;
+@@ -1943,13 +1955,14 @@
+   if (!/^\d+$/.test(advertiser_id)) return fail(res, 400, "账户 ID 无效");
+   const controller=new AbortController();res.once("close",()=>controller.abort());
+   const executionMode=req.headers["x-workbench-execution-mode"]==="simulate"?"simulate":"live";
+-  requestContext.run({advertiser_id, executionMode, signal:controller.signal, dim:requested.get("dim") || "all", scene:requested.get("scene") || "all",...(headlessWriteDeadline===undefined?{}:{headlessWriteDeadline})}, () => handleRequest(req,res));
++  requestContext.run({advertiser_id, executionMode, signal:controller.signal,headlessPrecondition:process.env.WORKBENCH_HEADLESS_KEY?req.headers['x-workbench-headless-precondition']:undefined,headlessManaged:!!process.env.WORKBENCH_HEADLESS_KEY&&req.headers['x-workbench-headless-mode']==='managed', dim:requested.get("dim") || "all", scene:requested.get("scene") || "all",...(headlessWriteDeadline===undefined?{}:{headlessWriteDeadline})}, () => handleRequest(req,res));
+ });
+ async function handleRequest(req, res) {
+   const url = new URL(req.url, `http://${HOST}:${PORT}`);
+   const p = url.pathname;
+   try {
+     if(READONLY_PREVIEW&&await previewHandler(req,res,url))return;
++    if(await chengfangHandler(req,res,url))return;
+     if(req.method==='GET'&&p==='/readonly-preview.js'){
+       res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'no-store'});return res.end(readFileSync(path.join(__dirname,'readonly-preview.js'),'utf8'));
+     }
+@@ -3636,7 +3649,7 @@
+     }
+     if(req.method==='POST'&&['/api/plan/status','/api/plan/roi','/api/plan/budget'].includes(p)){
+       const b=await readBody(req),planId=String(b.ad_id||''),accountId=String(currentAdv()),type=p.endsWith('/status')?'status':p.endsWith('/roi')?'roi':'budget',value=type==='status'?b.opt_status:Number(type==='roi'?b.roi2_goal:b.budget);
+-      const result=await verifiedPlanUpdate({accountId,planId,type,value,read:()=>apiGet('/open_api/v1.0/qianchuan/uni_promotion/ad/detail/',{advertiserId:accountId,app:'qianchuan_pc',query:{ad_id:big(planId)},fresh:true}),write:({before})=>{
++      const result=await verifiedPlanUpdate({accountId,planId,type,value,expectedConfigurationHash:requestContext.getStore()?.headlessPrecondition,read:()=>apiGet('/open_api/v1.0/qianchuan/uni_promotion/ad/detail/',{advertiserId:accountId,app:'qianchuan_pc',query:{ad_id:big(planId)},fresh:true}),write:({before})=>{
+         if(type==='status')return apiPost('/open_api/v1.0/qianchuan/uni_promotion/ad/status/update/',{advertiserId:accountId,app:'qianchuan_pc',body:{ad_ids:[big(planId)],opt_status:value}});
+         if(type==='budget')return apiPost('/open_api/v1.0/qianchuan/uni_promotion/ad/budget/update/',{advertiserId:accountId,app:'qianchuan_pc',body:{update_budget_infos:[{ad_id:big(planId),budget:value}]}});
+         const goal=before.delivery_setting?.deep_external_action;
+--- a/readonly-preview-policy.mjs
++++ b/readonly-preview-policy.mjs
+@@ -1,5 +1,8 @@
+ /** Explicit existing read endpoints. New endpoints require review before preview use. */
+ export const PREVIEW_READ_ENDPOINTS=new Set([
++  '/open_api/v1.0/qianchuan/tools/gray/',
++  '/open_api/v1.0/qianchuan/ad/material/get/',
++  '/open_api/v1.0/qianchuan/uni_promotion/ad/control_task/list/',
+   "/open_api/v1.0/qianchuan/report/all_promotion/get/",
+   "/open_api/v1.0/qianchuan/report/uni_promotion/get/",
+   "/open_api/2/ebp/advertiser/list/",
+@@ -72,6 +75,9 @@
+   "/open_api/v3.0/tools/comment_reply/get/"
+ ]);
+ export const PREVIEW_LIVE_WRITE_ENDPOINTS=new Set([
++ '/open_api/v1.0/qianchuan/uni_promotion/ad/control_task/create/',
++ '/open_api/v1.0/qianchuan/uni_promotion/ad/control_task/update/',
++ '/open_api/v1.0/qianchuan/uni_promotion/ad/control_task/status/update/',
+  '/open_api/v3.0/local/budget/update/',
+  '/open_api/v1.0/qianchuan/uni_promotion/ad/status/update/',
+  '/open_api/v1.0/qianchuan/uni_promotion/ad/budget/update/',
+--- a/readonly-preview-server.mjs
++++ b/readonly-preview-server.mjs
+@@ -9,6 +9,7 @@
+ const send=(res,status,data)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data));};
+ const blockedPrefixes=['/api/local/skills/','/api/watch/automation','/api/watch/run','/api/watch/force','/api/report/','/api/zongheng/','/api/async/'];
+ const mutationRoutes=new Set(['/api/plan/status','/api/plan/roi','/api/plan/budget','/api/material/delete','/api/creative/delete','/api/dmp/audience_delete','/api/suixin/order/terminate','/api/local/project/status','/api/local/promotion/status','/api/local/project/budget','/api/local/project/delete','/api/local/promotion/delete','/api/local/project/create','/api/local/promotion/create','/api/local/oc_project/material/add','/api/local/oc_project/material/delete']);
++for(const p of ['/api/chengfang/boost/create','/api/chengfang/boost/update','/api/chengfang/boost/status'])mutationRoutes.add(p);
+ 
+ /** Simulated changes are an overlay and never replace official report values. */
+ export function applyPreviewMutation(path,body,overlay){
+@@ -112,6 +113,10 @@
+   const requested=platform==='local'?body.local_account_id:body.advertiser_id;
+   if(requested!=null&&String(requested)!==String(selected))throw Object.assign(new Error('操作账户与页面选择不一致'),{statusCode:409});
+   const ref=await reference(platform,selected),key=platform+':'+ref.id,ledger=ledgers.get(key)||{actions:[],overlay:{}};
++  if(p.startsWith('/api/chengfang/boost/')){
++   if(req.headers['x-workbench-execution-mode']==='simulate')fail('该入口使用真实接口契约；开发验证使用隔离传输');
++   onLiveAuthorized({platform,accountId:ref.id,route:p});return false;
++  }
+   if(p==='/api/local/account/budget'){
+    if(req.headers['x-workbench-execution-mode']==='simulate')fail('账户日预算真实入口不接受模拟请求');
+    validateAccountBudgetAction(body);onLiveAuthorized({platform,accountId:ref.id,route:p});return false;

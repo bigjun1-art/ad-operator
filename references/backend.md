@@ -1,20 +1,28 @@
-# 本地配置与能力边界
+# 本地配置与后端接入
 
-需要Node.js 24或更新版本，以及已配置授权、包含 `headless-runtime.mjs` 和 `headless-actions.mjs` 的现有投流工作台后端。本仓库提供对话Skill和运行控制，不打包广告账户、授权模块、工作台业务数据或完整网页应用。
+运行环境为Node.js 24或更新版本，以及已有广告授权、精确ID传输、报表单位处理和日期范围处理的投流工作台后端。将 `integration/` 中的适配模块复制到后端，并按[接入说明](../integration/backend-patch.md)合并路由和请求校验。
 
-默认配置文件为 `~/.config/ad-operator/config.json`，也可由 `AD_OPERATOR_CONFIG` 指定本地文件：
+## 配置文件
+
+默认读取 `~/.config/ad-operator/config.json`，也可通过 `AD_OPERATOR_CONFIG` 指定：
 
 ```json
 {
   "backendRoot": "/absolute/path/to/qianchuan-console",
-  "stateRoot": "/absolute/path/to/private-ad-operator-state"
+  "stateRoot": "/absolute/path/to/private-ad-operator-state",
+  "knowledgeRoot": "/absolute/path/to/wiki001",
+  "knowledgeCaches": ["/absolute/path/to/official-document-crawl"]
 }
 ```
 
-`stateRoot`可省略，默认 `~/.local/state/ad-operator`。目录和文件只保存在本机；不要把配置、账户列表、授权文件、回执和运行状态复制进Git仓库。凭据由原后端已有的凭据适配器提供，Skill不读取、显示或复制凭据。
+`stateRoot`默认`~/.local/state/ad-operator`，托管保存在`sessions`，追投回执在`task-receipts`中按账户和计划分隔。`knowledgeRoot`和`knowledgeCaches`指向本机知识库及已有官方正文缓存，调用方法见[知识库说明](knowledge.md)。
 
-新建环境需要把 `integration/` 中的headless适配文件放到现有后端项目根目录；后端本身还需相应的只读计划详情与私有临时入口门禁。集成文件是适配源代码，不是独立广告SDK，不能在没有原后端的目录直接运行。现有本机安装由 `doctor` 验证文件可用性；它不等于账户授权已核实。
+凭据由后端已有适配器获取。配置、账户数据、回执和托管记录保存在私人目录，公开仓库发布技能和通用适配代码。
 
-日常操作通过 `actions`/`describe`取得当前字段定义。相同动作在两平台的对象、枚举和金额单位可以不同。任何写操作都应先取得真实授权账户和对应对象，不能使用示例ID执行。
+## 调用
 
-读取过程失败时保留原错误，不把空数组、零金额或模拟数据作为平台结果。尚未公开的本地推全域写入保持明确不可用，网页历史脚本存在不等于正式MAPI已开放。
+`doctor`检查配置与入口文件，`actions/describe`返回当前后端动作及字段。查询账户时取得当前应用的授权列表；查询实际对象和报表时验证范围、单位和完整性。
+
+临时调用启动所属后台的随机本机端口，关闭时释放进程与数据库。持续运行由明确授权的托管命令启动，按期限及停止指令退出。
+
+乘方适配依赖 `chengfang-policy/report/http/tasks/task-store`、配置指纹和已有报表模块。公开集成目录提供新增源码和后端接线差异；完整后端由使用者本机部署。

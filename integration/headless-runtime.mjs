@@ -1,6 +1,7 @@
 import {normalizeHeadlessRequest,assertHeadlessAuthorization,headlessIntentHash,headlessRoute,getHeadlessAction} from './headless-actions.mjs';
 import {fork} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
+import {planConfigurationHash,assertConfigurationHash} from './execution-preconditions.mjs';
 
 const error=(message,code='HEADLESS_BACKEND')=>Object.assign(Error(message),{code});
 export async function startHeadlessChild({startupTimeoutMs=15000}={}){
@@ -33,8 +34,8 @@ export async function withTemporaryBackend(run,{loadBackend,timeoutMs=120000}={}
    await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',()=>{server.removeListener('error',reject);resolve();});});started=true;
   }
   const origin=childRuntime?.origin||'http://127.0.0.1:'+backend.server.address().port;
-  const request=async({method='GET',path,body,writeDeadline})=>{
-   const response=await fetch(origin+path,{method,headers:{'content-type':'application/json',origin,'x-workbench-execution-mode':'live',...(childRuntime?.requestHeaders()||backend?.requestHeaders?.()||{}),...(method==='POST'&&writeDeadline!==undefined?{'x-workbench-headless-expires-at':String(writeDeadline)}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(timeoutMs)});
+  const request=async({method='GET',path,body,writeDeadline,managedWrite=false,preconditionHash})=>{
+   const response=await fetch(origin+path,{method,headers:{'content-type':'application/json',origin,'x-workbench-execution-mode':'live',...(childRuntime?.requestHeaders()||backend?.requestHeaders?.()||{}),...(method==='POST'&&writeDeadline!==undefined?{'x-workbench-headless-expires-at':String(writeDeadline)}:{}),...(managedWrite?{'x-workbench-headless-mode':'managed'}:{}),...(preconditionHash?{'x-workbench-headless-precondition':preconditionHash}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(timeoutMs)});
    let result;try{result=await response.json();}catch{throw error('工作台未返回有效JSON，不能确认操作结果','HEADLESS_RESPONSE_UNKNOWN');}
    if(!response.ok||result?.ok!==true)throw Object.assign(error(result?.error||'工作台请求失败',result?.code||'HEADLESS_BACKEND'),{httpStatus:response.status,writeAttempted:method==='POST',...(typeof result?.requestDispatched==='boolean'?{requestDispatched:result.requestDispatched}:{})});
    return result.data;
@@ -82,7 +83,15 @@ export async function runHeadless(input,{withBackend=withTemporaryBackend,now=Da
   const account=definition.accountRequired===false?null:await authorizedAccount(request,platform,accountId);
   const route=headlessRoute(normalized);
   if(mode==='read')return {ok:true,mode,platform,accountId:accountId??null,action:input.action,data:readableData(platform,input.action,await request(route),params),runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
-  const preflightDefinition=getHeadlessAction(platform,definition.preflight),before=readableData(platform,definition.preflight,await request(headlessRoute({...normalized,definition:preflightDefinition,params:preflightParams(definition,params)})));
+  const preflightDefinition=getHeadlessAction(platform,definition.preflight);
+  let before,preconditionHash;
+  if(['boost.create','boost.update','boost.status.set'].includes(definition.name)){
+   const operation={'boost.create':'create','boost.update':'update','boost.status.set':'status'}[definition.name],u=new URL('/api/chengfang/boost/prepare','http://127.0.0.1');
+   u.searchParams.set('advertiser_id',accountId);u.searchParams.set('workbench','qianchuan');u.searchParams.set('operation',operation);u.searchParams.set('params',JSON.stringify(params));
+   const staged=await request({method:'GET',path:u.pathname+u.search});before={task:staged.before,evidence:staged.evidence,request:staged.body};preconditionHash=staged.configurationHash;
+  }else before=readableData(platform,definition.preflight,await request(headlessRoute({...normalized,definition:preflightDefinition,params:preflightParams(definition,params)})));
+  if(platform==='qianchuan'&&definition.name.startsWith('plan.'))preconditionHash=planConfigurationHash(before);
+  if(mode==='execute'&&normalized.authorization.preconditionHash!==undefined)assertConfigurationHash(normalized.authorization.preconditionHash,preconditionHash);
   if(definition.name==='account.budget.set'&&(before.budget_mode!==params.expected.budget_mode||before.budget!==params.expected.budget))throw error('账户预算已变化，请重新读取并确认','HEADLESS_STALE');
   if(definition.name==='materials.remove'&&(!Array.isArray(before)||params.material_ids.some(id=>!before.some(row=>String(row.material_id)===id))))throw error('待移除素材未全部出现在该账户计划的完整素材列表中','HEADLESS_OBJECT_UNAUTHORIZED');
   if(definition.name==='project.status.set'||definition.name==='promotion.status.set'){
@@ -95,13 +104,13 @@ export async function runHeadless(input,{withBackend=withTemporaryBackend,now=Da
    if(before?.complete!==true||!Array.isArray(matches)||matches.length!==1)throw error('终止目标不在当前随心推账户的完整普通订单库存中，不能用计划或全域ID代替','HEADLESS_OBJECT_UNAUTHORIZED');
    normalOrder=matches[0];
   }
-  const prepared={platform,accountId,action:input.action,params,accountName:account?.name||account?.account_name||account?.local_account_name||accountId,before,intentHash:headlessIntentHash(normalized),request:route,destructive:definition.destructive===true};
+  const prepared={platform,accountId,action:input.action,params,accountName:account?.name||account?.account_name||account?.local_account_name||accountId,before,intentHash:headlessIntentHash(normalized),request:route,destructive:definition.destructive===true,...(preconditionHash?{preconditionHash}:{})};
   if(mode==='prepare')return {ok:true,mode,submitted:false,prepared,runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
   // Reads can outlive the approval window; validate again at the write boundary.
   assertHeadlessAuthorization(normalized,{now:now()});
   const ended=new Set(['FROZEN','FINISHED','OVER','TIMEOUT','UNPAIDCANCEL']);
   if(normalOrder&&ended.has(normalOrder.status))return {ok:true,mode,platform,accountId,action:input.action,executionAttempted:false,data:{verified:true,unchanged:true,submitted:false,observedOrderStatus:normalOrder.status,orderId:params.order_id},runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
-  let data=await request({...route,writeDeadline:Date.parse(normalized.authorization.expiresAt)});
+  let data=await request({...route,writeDeadline:Date.parse(normalized.authorization.expiresAt),managedWrite:normalized.authorization.executionMode==='managed',preconditionHash});
   if(normalOrder){
    const accepted=Array.isArray(data?.order_ids)&&data.order_ids.some(id=>String(id)===params.order_id);
    let observed=null;try{const after=await request(headlessRoute({...normalized,definition:preflightDefinition,params:{}}));observed=after?.list?.find(row=>String(row.order_id||'')===params.order_id)?.status??null;}catch{}
@@ -113,6 +122,6 @@ export async function runHeadless(input,{withBackend=withTemporaryBackend,now=Da
     data={verified:true,removedMaterialIds:[...params.material_ids],remainingCount:after.length,platformReceipt:data};
    }catch{throw Object.assign(error('移除请求已尝试提交，但素材列表尚未核实；只查询，不自动重发','WRITE_RESULT_UNKNOWN'),{writeAttempted:true});}
   }
-  return {ok:true,mode,platform,accountId,action:input.action,executionAttempted:true,data,runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
+  return {ok:true,mode,platform,accountId,action:input.action,executionAttempted:typeof data?.executionAttempted==='boolean'?data.executionAttempted:true,data,runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
  },{timeoutMs});
 }

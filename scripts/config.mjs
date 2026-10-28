@@ -12,7 +12,7 @@ export function invokeBackend(config,input,{signal,timeoutMs=180000}={}){
  return new Promise((resolve,reject)=>{
   const runner=`import {pathToFileURL} from 'node:url';try{let s='';for await(const c of process.stdin)s+=c;const {runHeadless}=await import(pathToFileURL(process.argv[1]));console.log(JSON.stringify(await runHeadless(JSON.parse(s))));}catch(e){console.log(JSON.stringify({ok:false,error:String(e.message).replace(/(?:access_token|refresh_token|cookie|secret|authorization)\\s*[:=]\\s*\\S+/gi,'[凭据已隐藏]'),code:e.code||'BACKEND_FAILED',...(e.requestDispatched===false?{requestDispatched:false}:{})}));process.exitCode=1;}`;
   const args=['--input-type=module','-e',runner,path.join(config.backendRoot,'headless-runtime.mjs')];
-  const child=spawn(process.execPath,args,{cwd:config.backendRoot,stdio:['pipe','pipe','pipe'],env:{...process.env,WORKBENCH_TEST:'1',DISABLE_BACKGROUND:'1'},signal});
+  const child=spawn(process.execPath,args,{cwd:config.backendRoot,stdio:['pipe','pipe','pipe'],env:{...process.env,WORKBENCH_TEST:'1',DISABLE_BACKGROUND:'1',...(config.stateRoot?{AD_OPERATOR_TASK_STATE_DIR:path.join(config.stateRoot,'task-receipts')}:{})},signal});
   let stdout='',stderr='',tooLarge=false;
   const timer=setTimeout(()=>child.kill('SIGTERM'),timeoutMs);
   child.stdout.on('data',b=>{stdout+=b;if(stdout.length>4*1024*1024){tooLarge=true;child.kill('SIGTERM');}});

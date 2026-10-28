@@ -48,19 +48,19 @@ ad-operator 将千川、随心推和巨量本地推工作台接入自然对话�
 
 投放中的决策需要连续的数据：这一轮花了多少、订单如何变化、哪些素材值得继续观察。工作台将定时查询、素材表现和投放操作放在同一套流程中，由你设定处理条件，Agent 负责取数、分析和执行。
 
-对话 Skill 支持定时查询和投放操作；所接工作台后端还提供千川直播素材监控。
+对话 Skill 按指定对象读取千川分区报表，并将素材表现、调控任务和执行回执关联到同一条投放指令。
 
-- **定时查询投放表现。** 对话监控支持 15～3600 秒的查询间隔，例如每 60 秒读取一次所选账户、报表类型和场景的汇总。每轮取得平台当时返回的消耗、订单和 ROI，按你设定的条件形成建议或执行投放调整。
-- **记录素材表现。** 工作台后端的千川直播监控可定期保存关联计划下各视频素材的累计消耗、点击率、支付 ROI、审核状态和追投状态，并按素材筛选条件给出观察建议。直播分钟流速取自绑定主播的汇总数据。
-- **通过对话操作投放。** 当前入口支持账户和报表查询、计划或项目配置调整，以及千川计划素材清单查询与移除。素材清单提供名称、ID 和状态。
+- **定时查询投放表现。** 对话监控支持 15～3600 秒的查询间隔，例如每 60 秒读取一次所选账户、商品计划、主播、素材或追投任务的数据。每轮取得平台当时返回的消耗、订单和 ROI，按你设定的条件形成建议或执行投放调整。
+- **记录素材表现。** 千川素材跟踪同时绑定计划与素材 ID，读取当前账户允许的报表字段、单位和统计期间，计算相邻完整快照的消耗、订单增量及每分钟变化。素材审核、投放状态和任务状态分别保留。
+- **通过对话操作投放。** 入口支持账户和报表查询、计划或项目配置调整、千川素材清单与移除，以及追投创建、名称与预算等设置修改、暂停、开启和手动结束。每次执行保存稳定请求标识和平台回执。
 
-监控设置中的“每分钟”指每隔 60 秒查询一次。现有对话托管使用所选账户、报表类型和场景的汇总数据；后端素材监控保存每轮取得的累计指标。单素材相邻快照的差值计算、连续触发规则和自动追投对话功能仍待接入。
+你可以为规则设置连续命中次数、最短观察窗口、动作冷却、调整比例、单次预算和追加预算总额度。严格“小于”和“小于等于”分别执行。产品、期间或累计数据重置时重新开始观察；提交前核对准备时的配置，原值变化则重新计算操作额度。
 
 ## 三个平台，一套对话入口
 
 | 平台 | 查询功能 | 投放操作 |
 | --- | --- | --- |
-| [千川](subskills/ad-operator-qianchuan/SKILL.md) | 授权账户、报表、全域/乘方计划、计划素材清单、余额和账户预算 | 对应计划的预算、目标 ROI、启停；移除计划中的指定素材 |
+| [千川](subskills/ad-operator-qianchuan/SKILL.md) | 授权账户、分区与素材报表、全域/乘方计划、追投任务、余额和预算 | 计划预算、ROI、启停；素材移除；追投创建、修改、暂停、开启和结束 |
 | [随心推](subskills/ad-operator-suixin/SKILL.md) | 普通订单、商品全域订单与报表、趋势、建议和预估 | 终止指定普通订单 |
 | [巨量本地推](subskills/ad-operator-local/SKILL.md) | 授权账户、标准项目和单元、素材、账户日预算、全域历史受众 | 账户日预算、标准项目预算、标准项目和单元启停 |
 
@@ -72,10 +72,22 @@ ad-operator 将千川、随心推和巨量本地推工作台接入自然对话�
 
 主 Skill 根据业务选择平台；三个子 Skill 分别处理本平台的账户授权、投放对象和接口参数，共用查询与执行程序。随心推使用自身应用授权，与千川 PC 应用分别取得账户列表。
 
+### 先读业务知识，再调用投放接口
+
+三平台均可通过对话检索本机知识库，读取官方手册、规则和操作资料，并保留原始链接、日期和版本。千川接入乘方知识链，本地推接入官方知识链，随心推复用已有普通、全域商品和全域直播资料索引。
+
+```sh
+node scripts/ad.mjs knowledge search --platform qianchuan --query '乘方 综合营销 ROI'
+node scripts/ad.mjs knowledge search --platform local --query '直播 全域'
+node scripts/ad.mjs knowledge search --platform suixin --query '随心推 全域 推商品'
+```
+
+配置与正文读取见[三平台知识库调用](references/knowledge.md)，乘方指标、素材条件与任务操作见[乘方操作](references/chengfang.md)。
+
 ### 报表与金额
 
 - **千川余额：**`account_general_total` 原值的单位为千分之一分，除以 100000 得到元。查询同时保留原值和元值。
-- **千川报表：**`dim=all` 统计标准以外的整体投放，标准投放通过 `dim=standard` 单独查询。官方支付 ROI、净成交 ROI 和“实付金额 ÷ 消耗”的计算值分别展示。
+- **千川报表：**乘方、全域和整体期间分别取数；乘方采用官方综合营销 ROI，成本中明确纳入的预估达人佣金和团长服务费分别记录。官方 ROI 与按已确认成本计算的值单列。标准投放通过 `dim=standard` 查询。
 - **本地推预算：**账户日预算以元设置，最多两位小数；标准项目详情中的预算和出价原值为分，查询另给元值，修改预算时输入元。隔日预算受理后，按回执中的生效日期查询结果。
 - **随心推普通报表：**金额字段保留接口原值，附 `unitKnown:false`。当前托管支持在用户未设置金额条件时，按订单数触发普通订单终止；带金额条件的规则暂不可运行。
 
@@ -101,11 +113,13 @@ node scripts/install-subskills.mjs
 
 ```json
 {
-  "backendRoot": "/absolute/path/to/qianchuan-console"
+  "backendRoot": "/absolute/path/to/qianchuan-console",
+  "knowledgeRoot": "/absolute/path/to/wiki001",
+  "knowledgeCaches": ["/absolute/path/to/official-document-crawl"]
 }
 ```
 
-首次接入后端时，按[后端接入说明](integration/backend-patch.md)安装适配文件、配置所需路由和请求校验。平台凭据由原后端管理。本机配置保存后端路径，运行状态默认保存在 `~/.local/state/ad-operator`；账户数据、操作回执和托管规则保存在本机，发布仓库时排除这些文件。
+首次接入后端时，按[后端接入说明](integration/backend-patch.md)安装适配模块并合并所附接线差异，配置所需路由和请求校验。平台凭据由原后端管理。本机配置保存后端路径，运行状态默认保存在 `~/.local/state/ad-operator`；账户数据、操作回执和托管规则保存在本机，发布仓库时排除这些文件。
 
 ### 3. 查询账户
 
@@ -122,7 +136,8 @@ node scripts/ad.mjs read accounts.list --platform qianchuan
 查询具体操作所需的参数：
 
 ```sh
-node scripts/ad.mjs describe plan.budget.set --platform qianchuan
+node scripts/ad.mjs describe marketing.report.get --platform qianchuan
+node scripts/ad.mjs describe boost.create --platform qianchuan
 node scripts/ad.mjs describe order.terminate --platform suixin
 node scripts/ad.mjs describe account.budget.set --platform local
 ```
@@ -134,7 +149,9 @@ node scripts/ad.mjs describe account.budget.set --platform local
 - [scripts/](scripts/)：命令入口、子 Skill 安装和托管运行程序。
 - [integration/](integration/)：现有后端的适配代码与接入说明。
 - [references/backend.md](references/backend.md)：本地配置、运行状态目录与后端依赖。
-- [references/managed.md](references/managed.md)：托管规则、指标、停止和结果核对。
+- [references/managed.md](references/managed.md)：托管对象、指标、窗口、停止和结果核对。
+- [references/chengfang.md](references/chengfang.md)：乘方口径、素材条件和任务生命周期。
+- [references/knowledge.md](references/knowledge.md)：三平台知识入口和本地正文缓存。
 
 运行测试：
 

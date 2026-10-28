@@ -26,3 +26,15 @@ if (process.env.WORKBENCH_HEADLESS_KEY &&
 执行授权的截止时间还需通过私有临时请求的 expires-at 标头传入请求上下文，贯穿 `apiPost`、本地推写入适配和底层transport的 `writeDeadline` 选项。只在私有headless门禁开启的POST解析这个标头；普通网页请求不继承它。校验应覆盖服务端详情回读、并发等待、节流等待与凭据获取，在实际平台fetch前再次检查。过期且尚未发送的请求必须保留 `requestDispatched:false`，不能将它改成未知回执或允许继续发送。
 
 随心推普通和商品全域报表在汇总前调用`checkedSuixinCore`核对真实核心字段，不能将null、缺失或非法值补成0；库存用`checkedSuixinOrderPage`核对has_more、失败项和游标，缺少完整性证据时不可返回complete=true。日期范围和金额口径继续由原后端验证，不把不完整结果交给托管规则。
+
+## 乘方与三平台知识调用（0.3）
+
+新增适配模块为 `chengfang-policy.mjs`、`chengfang-report.mjs`、`chengfang-http.mjs`、`chengfang-tasks.mjs`、`chengfang-task-store.mjs`、`execution-preconditions.mjs`，并同步本目录 `verified-plan-update.mjs`。后端原有 `report-contract.mjs`、`report-currency-service.mjs`、官方请求契约、精确ID传输和日期范围模块继续提供依赖。
+
+`server-chengfang.patch`给出现有后端接线差异：注册乘方请求处理、绑定账户、传递托管模式和配置指纹、允许明确的调控工具路径。应用前读取当前后端内容并合并相应段落，保留本机已有修改。
+
+GET `/api/chengfang/fields/report/context/diagnose/tasks/task/receipt`分别提供指标配置、报表、配置、诊断、任务和回执。追投准备使用GET `/api/chengfang/boost/prepare`，实际写入使用POST `/api/chengfang/boost/create/update/status`。广告层调用均经原 `apiGet/apiPost`，在实际POST前校验授权截止时间。
+
+临时进程接收 `AD_OPERATOR_TASK_STATE_DIR`，回执存于私人 `stateRoot/task-receipts`。配置指纹经 `x-workbench-headless-precondition` 传递，并在最终持锁读取后校验；`x-workbench-headless-mode=managed`标识已明确开启的托管执行。上述标头只用于所属本机临时后台。
+
+知识库调用在Skill进程读取本机索引和已配置正文缓存，无需启动广告后台。三平台入口、缓存格式及命令见 `references/knowledge.md`。
