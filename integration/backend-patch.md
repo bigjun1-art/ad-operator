@@ -38,3 +38,13 @@ GET `/api/chengfang/fields/report/context/diagnose/tasks/task/receipt`分别提�
 临时进程接收 `AD_OPERATOR_TASK_STATE_DIR`，回执存于私人 `stateRoot/task-receipts`。配置指纹经 `x-workbench-headless-precondition` 传递，并在最终持锁读取后校验；`x-workbench-headless-mode=managed`标识已明确开启的托管执行。上述标头只用于所属本机临时后台。
 
 知识库调用在Skill进程读取本机索引和已配置正文缓存，无需启动广告后台。三平台入口、缓存格式及命令见 `references/knowledge.md`。
+
+## 分页、命令统计与数据时效（0.4）
+
+同步`data-core.mjs`、`command-request-context.mjs`与`source-observation.mjs`；合并`server-reference-fusion.patch`中的接线。该差异以0.3后端为基线，与乘方差异按版本顺序应用。`headless-actions/runtime`使用本目录最新文件。
+
+Transport在实际fetch前预留一次请求额度，成功响应时间随缓存保留。server通过ALS给一次临时命令共享请求统计；普通网页每次HTTP请求独立统计。私有`GET /api/internal/headless/request-metrics`受已有headless key保护。错误发生前未派发与提交后回读失败分别保留原状态。
+
+聚合响应合并原始数据和依赖采集时间，取最早时间；任一来源时间未知、无效或未来时标记`observationTimeUnknown`，技能停止本轮规则判断。`collectPages`增加`strictPagination`和`identityOf`：报表组合键由调用端按真实维度指定，默认校验精确重复行；保留逐页请求ID和原始分页信息。
+
+`local-standard-adapter.mjs`与`verified-plan-update.mjs`保留派发前请求额度拒绝的`requestDispatched:false`；写入后的回读失败仍为未知结果。

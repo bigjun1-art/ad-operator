@@ -12,7 +12,7 @@ const qcScope={...scope,dim:optional(option(['all','uni','overall','standard']))
 const suixinScope={...scope,dim:optional(option(['normal','uni'])),scene:optional(option(['all','live','video']))};
 const localScope={...scope,mgoal:optional(option(['all','LIVE','VIDEO_IMAGE'])),delivery:optional(option(['standard','manual','standard_manual','standard_auto']))};
 const entries=[];
-function add(platform,name,method,path,schema={},extra={}){entries.push({platform,name,method,path,schema,...extra});}
+function add(platform,name,method,path,schema={},extra={}){entries.push({platform,name,method,path,schema,effect:method==='POST'?'write':'read',...extra});}
 add('qianchuan','accounts.list','GET','/api/accounts',{}, {accountRequired:false});
 add('local','accounts.list','GET','/api/local/accounts',{}, {accountRequired:false});
 add('suixin','accounts.list','GET','/api/suixin/accounts',{}, {accountRequired:false,note:'使用随心推应用自身授权发现，不借用千川PC账户授权。'});
@@ -71,6 +71,27 @@ add('local','project.status.set','POST','/api/local/project/status',{data:{type:
 add('local','promotion.status.set','POST','/api/local/promotion/status',{data:{type:'statusBatch',entity:'promotion_id'}},{preflight:'promotions.list'});
 
 export const HEADLESS_ACTIONS=Object.freeze(entries.map(entry=>Object.freeze(entry)));
+const backendRoutes=Object.freeze({
+ GET:Object.freeze(['/api/accounts', '/api/local/accounts', '/api/suixin/accounts', '/api/suixin/overview', '/api/suixin/orders', '/api/suixin/uni_orders', '/api/suixin/trend', '/api/qianchuan/aweme/suggest_roi', '/api/qianchuan/aweme/suggest_bid', '/api/qianchuan/aweme/estimate_profit', '/api/qianchuan/aweme/uni_promotion/order_report', '/api/overview', '/api/local/overview', '/api/command/plans', '/api/plan/detail', '/api/chengfang/fields', '/api/chengfang/report', '/api/chengfang/context', '/api/chengfang/diagnose', '/api/chengfang/tasks', '/api/chengfang/task', '/api/chengfang/receipt', '/api/qianchuan/balance', '/api/qianchuan/budget', '/api/qianchuan/logs', '/api/local/balance', '/api/local/account/budget', '/api/local/projects', '/api/local/promotions', '/api/local/project/detail', '/api/local/aweme/list', '/api/materials', '/api/local/material/videos', '/api/local/global/audience']),
+ POST:Object.freeze(['/api/suixin/order/terminate', '/api/chengfang/boost/create', '/api/chengfang/boost/update', '/api/chengfang/boost/status', '/api/plan/budget', '/api/plan/roi', '/api/plan/status', '/api/material/delete', '/api/local/account/budget', '/api/local/project/budget', '/api/local/project/status', '/api/local/promotion/status']),
+});
+export function validateHeadlessActions(actions=HEADLESS_ACTIONS,{routes=backendRoutes}={}){
+ const seen=new Set();
+ for(const action of actions){
+  const key=action.platform+':'+action.name;
+  if(!['qianchuan','suixin','local'].includes(action.platform)||!action.name||seen.has(key))fail('动作平台或名称重复/无效：'+key,'HEADLESS_CATALOG');
+  seen.add(key);
+  if(!['GET','POST'].includes(action.method)||action.effect!==(action.method==='POST'?'write':'read'))fail('动作效果与方法不一致：'+key,'HEADLESS_CATALOG');
+  if(!routes[action.method]?.includes(action.path))fail('动作没有对应的后端方法和路由：'+key,'HEADLESS_CATALOG');
+  if(action.method==='POST'&&!action.preflight)fail('修改动作缺少预检：'+key,'HEADLESS_CATALOG');
+  if(action.preflight){
+   const before=actions.find(candidate=>candidate.platform===action.platform&&candidate.name===action.preflight);
+   if(!before||before.method!=='GET'||before.effect!=='read')fail('预检必须为同平台已接入的读取动作：'+key,'HEADLESS_CATALOG');
+  }
+ }
+ return true;
+}
+validateHeadlessActions();
 export const HEADLESS_LIMITATIONS=Object.freeze([
  '本地推LIVE_ROI2/POI_ROI2全域对象预算、ROI、素材生命周期专用写入当前公开MAPI未提供；不以标准项目/单元接口替代。',
  '全域启停与标准项目/单元ID映射尚待官方明确；本入口只提供明确的标准对象启停。',

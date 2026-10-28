@@ -1,12 +1,17 @@
 import {normalizeHeadlessRequest,assertHeadlessAuthorization,headlessIntentHash,headlessRoute,getHeadlessAction} from './headless-actions.mjs';
 import {fork} from 'node:child_process';
+import {mergeSourceObservation} from './source-observation.mjs';
 import {randomBytes} from 'node:crypto';
 import {planConfigurationHash,assertConfigurationHash} from './execution-preconditions.mjs';
 
 const error=(message,code='HEADLESS_BACKEND')=>Object.assign(Error(message),{code});
-export async function startHeadlessChild({startupTimeoutMs=15000}={}){
+function validateMaxRequests(maxRequests){
+ if(maxRequests!==undefined&&(!Number.isSafeInteger(maxRequests)||maxRequests<0))throw error('单命令请求上限须为非负安全整数','HEADLESS_INPUT');
+}
+export async function startHeadlessChild({startupTimeoutMs=15000,maxRequests}={}){
+ validateMaxRequests(maxRequests);
  const accessKey=randomBytes(32).toString('hex');
- const child=fork(new URL('./headless-server-child.mjs',import.meta.url),[],{stdio:['ignore','ignore','ignore','ipc'],env:{...process.env,WORKBENCH_TEST:'1',WORKBENCH_READONLY_PREVIEW:'1',DISABLE_BACKGROUND:'1',WORKBENCH_HEADLESS_KEY:accessKey},execArgv:[]});
+ const child=fork(new URL('./headless-server-child.mjs',import.meta.url),[],{stdio:['ignore','ignore','ignore','ipc'],env:{...process.env,WORKBENCH_TEST:'1',WORKBENCH_READONLY_PREVIEW:'1',DISABLE_BACKGROUND:'1',WORKBENCH_HEADLESS_KEY:accessKey,...(maxRequests===undefined?{}:{WORKBENCH_COMMAND_MAX_REQUESTS:String(maxRequests)})},execArgv:[]});
  let exited=false;const exit=new Promise(resolve=>{child.once('exit',()=>{exited=true;resolve();});child.once('error',()=>{if(!child.pid){exited=true;resolve();}});});
  const close=async()=>{
   if(exited)return;
@@ -24,12 +29,13 @@ export async function startHeadlessChild({startupTimeoutMs=15000}={}){
   return {origin:'http://127.0.0.1:'+ready.port,pid:child.pid,requestHeaders:()=>({'x-workbench-headless-key':accessKey}),close};
  }catch(e){await close();throw e;}
 }
-export async function withTemporaryBackend(run,{loadBackend,timeoutMs=120000}={}){
+export async function withTemporaryBackend(run,{loadBackend,timeoutMs=120000,maxRequests}={}){
+ validateMaxRequests(maxRequests);
  if(!Number.isInteger(timeoutMs)||timeoutMs<100||timeoutMs>300000)throw error('临时请求超时范围应为100–300000毫秒','HEADLESS_INPUT');
  let backend,started=false,ownedBackend=false,childRuntime;
  try{
   if(loadBackend)backend=await loadBackend();
-  else childRuntime=await startHeadlessChild();
+  else childRuntime=await startHeadlessChild({maxRequests});
   if(backend){const {server}=backend;if(server.listening)throw error('临时入口不会接管已有监听实例','HEADLESS_EXISTING_SERVER');ownedBackend=true;
    await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',()=>{server.removeListener('error',reject);resolve();});});started=true;
   }
@@ -40,7 +46,11 @@ export async function withTemporaryBackend(run,{loadBackend,timeoutMs=120000}={}
    if(!response.ok||result?.ok!==true)throw Object.assign(error(result?.error||'工作台请求失败',result?.code||'HEADLESS_BACKEND'),{httpStatus:response.status,writeAttempted:method==='POST',...(typeof result?.requestDispatched==='boolean'?{requestDispatched:result.requestDispatched}:{})});
    return result.data;
   };
-  return await run({request,origin,backend,pid:childRuntime?.pid});
+  const getRequestMetrics=childRuntime
+   ? ()=>request({path:'/api/internal/headless/request-metrics'})
+   : typeof backend?.getRequestMetrics==='function'?()=>backend.getRequestMetrics():async()=>null;
+  try{return await run({request,getRequestMetrics,origin,backend,pid:childRuntime?.pid});}
+  catch(e){try{e.runtime={...e.runtime,requestMetrics:await getRequestMetrics()};}catch{}throw e;}
  }finally{
   if(started){backend.server.closeIdleConnections?.();await new Promise(resolve=>{backend.server.close(resolve);backend.server.closeAllConnections?.();});}
   if(ownedBackend&&backend?.watchStore)backend.watchStore.close();
@@ -59,7 +69,7 @@ function preflightParams(action,params){
  if(action.preflight==='project.detail')return {project_id:params.project_id};return {};
 }
 const numberOrNull=value=>['number','string'].includes(typeof value)&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
-function readableData(platform,action,data,params={}){
+function transformReadableData(platform,action,data,params={}){
  if(platform==='suixin'&&(action==='overview.get'&&data?.mode==='normal'||action==='trend.get')){
   return {...data,money_units:{cost:'platform_raw_unit_unconfirmed',gmv:'platform_raw_unit_unconfirmed'},monetaryVerification:{unitKnown:false,source:'https://open.oceanengine.com/labels/12/docs/1754616243989519',reason:'当前普通随心推公开报表正文未注明金额单位；原值保留，不当作元金额用于自动规则。'}};
  }
@@ -76,13 +86,20 @@ function readableData(platform,action,data,params={}){
  }
  return data;
 }
-export async function runHeadless(input,{withBackend=withTemporaryBackend,now=Date.now,timeoutMs}={}){
+function readableData(platform,action,data,params={}){
+ const result=transformReadableData(platform,action,data,params);
+ if(!result||typeof result!=='object'||Array.isArray(result))return result;
+ return mergeSourceObservation({...result,...Object.fromEntries(['observedAt','sourceObservedAt','fetchedAt','observationTimeBasis','observationTimeUnknown','complete'].filter(k=>data&&Object.hasOwn(data,k)).map(k=>[k,data[k]]))},{allowReceiptTime:true});
+}
+export async function runHeadless(input,{withBackend=withTemporaryBackend,now=Date.now,timeoutMs,maxRequests}={}){
+ validateMaxRequests(maxRequests);
  const normalized=normalizeHeadlessRequest(input),{definition,mode,platform,accountId,params}=normalized;
  if(mode==='execute')assertHeadlessAuthorization(normalized,{now:now()});
- return withBackend(async({request})=>{
+ return withBackend(async({request,getRequestMetrics})=>{
+  const finish=async result=>{let requestMetrics=null;try{if(typeof getRequestMetrics==='function')requestMetrics=await getRequestMetrics();}catch{}return {...result,runtime:{...result.runtime,requestMetrics}};};
   const account=definition.accountRequired===false?null:await authorizedAccount(request,platform,accountId);
   const route=headlessRoute(normalized);
-  if(mode==='read')return {ok:true,mode,platform,accountId:accountId??null,action:input.action,data:readableData(platform,input.action,await request(route),params),runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
+  if(mode==='read')return finish({ok:true,mode,platform,accountId:accountId??null,action:input.action,data:readableData(platform,input.action,await request(route),params),runtime:{temporary:true,browserOpened:false,backgroundStarted:false}});
   const preflightDefinition=getHeadlessAction(platform,definition.preflight);
   let before,preconditionHash;
   if(['boost.create','boost.update','boost.status.set'].includes(definition.name)){
@@ -105,11 +122,11 @@ export async function runHeadless(input,{withBackend=withTemporaryBackend,now=Da
    normalOrder=matches[0];
   }
   const prepared={platform,accountId,action:input.action,params,accountName:account?.name||account?.account_name||account?.local_account_name||accountId,before,intentHash:headlessIntentHash(normalized),request:route,destructive:definition.destructive===true,...(preconditionHash?{preconditionHash}:{})};
-  if(mode==='prepare')return {ok:true,mode,submitted:false,prepared,runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
+  if(mode==='prepare')return finish({ok:true,mode,submitted:false,prepared,runtime:{temporary:true,browserOpened:false,backgroundStarted:false}});
   // Reads can outlive the approval window; validate again at the write boundary.
   assertHeadlessAuthorization(normalized,{now:now()});
   const ended=new Set(['FROZEN','FINISHED','OVER','TIMEOUT','UNPAIDCANCEL']);
-  if(normalOrder&&ended.has(normalOrder.status))return {ok:true,mode,platform,accountId,action:input.action,executionAttempted:false,data:{verified:true,unchanged:true,submitted:false,observedOrderStatus:normalOrder.status,orderId:params.order_id},runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
+  if(normalOrder&&ended.has(normalOrder.status))return finish({ok:true,mode,platform,accountId,action:input.action,executionAttempted:false,data:{verified:true,unchanged:true,submitted:false,observedOrderStatus:normalOrder.status,orderId:params.order_id},runtime:{temporary:true,browserOpened:false,backgroundStarted:false}});
   let data=await request({...route,writeDeadline:Date.parse(normalized.authorization.expiresAt),managedWrite:normalized.authorization.executionMode==='managed',preconditionHash});
   if(normalOrder){
    const accepted=Array.isArray(data?.order_ids)&&data.order_ids.some(id=>String(id)===params.order_id);
@@ -122,6 +139,6 @@ export async function runHeadless(input,{withBackend=withTemporaryBackend,now=Da
     data={verified:true,removedMaterialIds:[...params.material_ids],remainingCount:after.length,platformReceipt:data};
    }catch{throw Object.assign(error('移除请求已尝试提交，但素材列表尚未核实；只查询，不自动重发','WRITE_RESULT_UNKNOWN'),{writeAttempted:true});}
   }
-  return {ok:true,mode,platform,accountId,action:input.action,executionAttempted:typeof data?.executionAttempted==='boolean'?data.executionAttempted:true,data,runtime:{temporary:true,browserOpened:false,backgroundStarted:false}};
- },{timeoutMs});
+  return finish({ok:true,mode,platform,accountId,action:input.action,executionAttempted:typeof data?.executionAttempted==='boolean'?data.executionAttempted:true,data,runtime:{temporary:true,browserOpened:false,backgroundStarted:false}});
+ },{timeoutMs,maxRequests});
 }

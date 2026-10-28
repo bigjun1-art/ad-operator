@@ -8,7 +8,7 @@ import {startManaged,managedStatus,stopManaged,reconcileManaged} from './managed
 import {invokeBackend} from './config.mjs';
 const fixtureAccount='7777000000000001',fixturePlan='7777000000000002';
 const policy=(extra={})=>({platform:'qianchuan',accountId:fixtureAccount,mode:'managed',explicitManagedAuthorization:true,userInstruction:'测试隔离驱动：明确开启托管',expiresAt:new Date(Date.now()+60000).toISOString(),intervalSeconds:15,maxObservedCost:500,maxSingleBudget:300,maxActionsPerDay:3,scope:{dim:'all',scene:'video'},entityIds:[fixturePlan],allowedActions:['plan.status.set'],rules:[{id:'pause-on-cost',metric:'cost',operator:'gte',threshold:100,action:{name:'plan.status.set',params:{ad_id:fixturePlan,opt_status:'DISABLE'}}}],...extra});
-const result=(extra={})=>({ok:true,data:{summary:{cost:120,orders:2,payment_roi:2.25,cash_return_ratio:1.48,...extra}}});
+const result=(extra={},observedAt=Date.now())=>({ok:true,data:{observedAt,summary:{cost:120,orders:2,payment_roi:2.25,cash_return_ratio:1.48,...extra}}});
 test('explicit continuous authorization, deadline, bounded objects and platform scope are required',()=>{
  for(const patch of [{explicitManagedAuthorization:false},{expiresAt:'2000-01-01'},{entityIds:['7777000000000003']},{platform:'local',scope:{dim:'all'}}])assert.throws(()=>validateManagedPolicy(policy(patch)));
  assert.equal(validateManagedPolicy(policy()).accountId,fixtureAccount);
@@ -27,7 +27,7 @@ test('Suixin continuous rules bind ordinary order IDs and never use PC plan oper
 });
 test('unconfirmed Suixin money cannot satisfy a yuan cost boundary; count-only termination keeps its separate scope',async()=>{
  const p=policy({platform:'suixin',scope:{dim:'normal',scene:'video'},allowedActions:['order.terminate'],rules:[{id:'end-order',metric:'orders',operator:'gte',threshold:1,action:{name:'order.terminate',params:{order_id:fixturePlan}}}]});let writes=0;
- const deps={read:async()=>({ok:true,data:{complete:true,summary:{cost:100000,orders:2},monetaryVerification:{unitKnown:false}}}),prepare:async()=>({}),execute:async()=>{writes++;return {ok:true,data:{verified:true}};}};
+ const deps={read:async()=>({ok:true,data:{observedAt:Date.now(),complete:true,summary:{cost:100000,orders:2},monetaryVerification:{unitKnown:false}}}),prepare:async()=>({}),execute:async()=>{writes++;return {ok:true,data:{verified:true}};}};
  const guarded=createManagedRunner(p,deps);await guarded.tick();assert.equal(writes,0);assert.equal(guarded.state.status,'read_error');
  delete p.maxObservedCost;const countOnly=createManagedRunner(p,deps);await countOnly.tick();assert.equal(writes,1);
 });
@@ -45,6 +45,9 @@ test('cost boundary permits only explicitly authorized pause, not budget increas
  let writes=0;const r=createManagedRunner(policy({maxObservedCost:100}),{read:async()=>result(),prepare:async()=>({}),execute:async()=>{writes++;return {ok:true,data:{verified:true}};}});await r.tick();assert.equal(writes,1);assert.equal(r.state.status,'cost_limit_reached');
 });
 test('local standard summary accepts its actual shape but does not invent official ROI',()=>{const s=monitoringSummary({ok:true,data:{cost:20,order:2,roi:1.5,complete:true}},'local');assert.equal(s.orders,2);assert.equal(s.payment_roi,null);});
+test('account-level monitoring also rejects stale and absent source timestamps',async()=>{
+ const now=Date.now();for(const observedAt of [undefined,now-60000]){let writes=0;const p=policy({maxDataAgeSeconds:60}),r=createManagedRunner(p,{now:()=>now,read:async()=>({...result(),data:{...result().data,observedAt}}),prepare:async()=>({}),execute:async()=>writes++});await r.tick();assert.equal(writes,0);assert.equal(r.state.status,'read_error');assert.ok(['OBSERVATION_STALE','OBSERVATION_TIME_MISSING'].includes(r.state.health.collection.errorCode));}
+});
 test('persisted submitting state never resumes writes automatically',async()=>{const r=createManagedRunner(policy(),{state:{version:1,actions:[{status:'submitting'}],completedRuleIds:[],proposals:[]},read:async()=>{throw Error('must not read');}});assert.equal((await r.tick()).status,'needs_reconciliation');});
 test('a backend-proven unsent failure is preserved through the wrapper and does not become unknown',async()=>{
  const directory=await mkdtemp(path.join(tmpdir(),'ad-operator-unsent-'));await writeFile(path.join(directory,'headless-runtime.mjs'),"export async function runHeadless(){throw Object.assign(Error('expired'),{code:'HEADLESS_AUTHORIZATION_EXPIRED',requestDispatched:false});}");
@@ -53,18 +56,18 @@ test('a backend-proven unsent failure is preserved through the wrapper and does 
 });
 test('preparation crossing the business midnight re-reads before it can submit',async()=>{
  let now=Date.parse('2030-01-01T15:59:59Z'),writes=0;
- const p=policy({expiresAt:'2030-01-02T16:00:00Z'}),r=createManagedRunner(p,{now:()=>now,read:async()=>result(),prepare:async()=>{now+=2000;return {};},execute:async()=>writes++});
+ const p=policy({expiresAt:'2030-01-02T16:00:00Z'}),r=createManagedRunner(p,{now:()=>now,read:async()=>result({},now),prepare:async()=>{now+=2000;return {};},execute:async()=>writes++});
  await r.tick();assert.equal(r.state.status,'day_boundary_recheck');assert.equal(writes,0);
 });
 test('a read crossing the business midnight cannot use yesterday totals to write today',async()=>{
  let now=Date.parse('2030-01-01T15:59:59Z'),writes=0;
- const r=createManagedRunner(policy({expiresAt:'2030-01-02T16:00:00Z'}),{now:()=>now,read:async()=>{now+=2000;return result();},prepare:async()=>({}),execute:async()=>writes++});
+ const r=createManagedRunner(policy({expiresAt:'2030-01-02T16:00:00Z'}),{now:()=>now,read:async()=>{now+=2000;return result({},now);},prepare:async()=>({}),execute:async()=>writes++});
  await r.tick();assert.equal(writes,0);assert.equal(r.state.status,'day_boundary_recheck');
 });
 test('owned process lifecycle starts, reports and stops with an isolated backend; no real account calls',async()=>{
  const directory=await mkdtemp(path.join(tmpdir(),'ad-operator-lifecycle-'));
  await writeFile(path.join(directory,'headless-actions.mjs'),'export function normalizeHeadlessRequest(v){return v;}');
- await writeFile(path.join(directory,'headless-runtime.mjs'),'export async function runHeadless(){return {ok:true,data:{summary:{cost:0,orders:0}}};}');
+ await writeFile(path.join(directory,'headless-runtime.mjs'),'export async function runHeadless(){return {ok:true,data:{observedAt:Date.now(),summary:{cost:0,orders:0}}};}');
  const config={backendRoot:directory,stateRoot:path.join(directory,'state')},p=policy();let session;
  await assert.rejects(()=>startManaged(config,p),/confirm-managed/);
  try{session=await startManaged(config,p,{confirmed:true});let s;for(let n=0;n<40;n++){s=await managedStatus(config,session.sessionId);if(s.status==='running')break;await new Promise(r=>setTimeout(r,50));}assert.equal(s.processRunning,true);assert.equal(s.status,'running');assert.equal(s.actions.length,0);const stopped=await stopManaged(config,session.sessionId);assert.equal(stopped.stopped,true);assert.equal((await managedStatus(config,session.sessionId)).processRunning,false);}
@@ -73,7 +76,7 @@ test('owned process lifecycle starts, reports and stops with an isolated backend
 test('unknown write remains blocked across a new session, and read-only reconciliation can release it',async()=>{
  const directory=await mkdtemp(path.join(tmpdir(),'ad-operator-unknown-')),count=path.join(directory,'writes.txt');
  await writeFile(path.join(directory,'headless-actions.mjs'),'export function normalizeHeadlessRequest(v){return v;}');
- await writeFile(path.join(directory,'headless-runtime.mjs'),`import {appendFileSync} from 'node:fs';export async function runHeadless(i){if(i.mode==='read')return {ok:true,data:i.action==='plan.detail'?{opt_status:'DISABLE'}:{summary:{cost:200,orders:1}}};if(i.mode==='prepare')return {ok:true,prepared:{platform:i.platform,accountId:i.accountId,action:i.action,intentHash:'fixture'}};appendFileSync(${JSON.stringify(count)},'write\\n');return {ok:true,data:{status:'unknown'}};}`);
+ await writeFile(path.join(directory,'headless-runtime.mjs'),`import {appendFileSync} from 'node:fs';export async function runHeadless(i){if(i.mode==='read')return {ok:true,data:i.action==='plan.detail'?{opt_status:'DISABLE'}:{observedAt:Date.now(),summary:{cost:200,orders:1}}};if(i.mode==='prepare')return {ok:true,prepared:{platform:i.platform,accountId:i.accountId,action:i.action,intentHash:'fixture'}};appendFileSync(${JSON.stringify(count)},'write\\n');return {ok:true,data:{status:'unknown'}};}`);
  const config={backendRoot:directory,stateRoot:path.join(directory,'state')},p=policy();const first=await startManaged(config,p,{confirmed:true});
  try{
   let s;for(let n=0;n<80;n++){s=await managedStatus(config,first.sessionId);if(s.status==='needs_reconciliation'&&!s.processRunning)break;await new Promise(r=>setTimeout(r,50));}
@@ -85,7 +88,7 @@ test('unknown write remains blocked across a new session, and read-only reconcil
 test('expiry aborts an in-flight slow read and exits instead of waiting for backend timeout',async()=>{
  const directory=await mkdtemp(path.join(tmpdir(),'ad-operator-expiry-'));
  await writeFile(path.join(directory,'headless-actions.mjs'),'export function normalizeHeadlessRequest(v){return v;}');
- await writeFile(path.join(directory,'headless-runtime.mjs'),'export async function runHeadless(){await new Promise(r=>setTimeout(r,4000));return {ok:true,data:{summary:{cost:0,orders:0}}};}');
+ await writeFile(path.join(directory,'headless-runtime.mjs'),'export async function runHeadless(){await new Promise(r=>setTimeout(r,4000));return {ok:true,data:{observedAt:Date.now(),summary:{cost:0,orders:0}}};}');
  const config={backendRoot:directory,stateRoot:path.join(directory,'state')},deadline=Date.now()+1500,session=await startManaged(config,policy({expiresAt:new Date(deadline).toISOString()}),{confirmed:true});
  try{let s;for(let n=0;n<65;n++){s=await managedStatus(config,session.sessionId);if(!s.processRunning)break;await new Promise(r=>setTimeout(r,50));}assert.equal(s.processRunning,false);assert.equal(s.status,'expired');assert.ok(Date.now()<deadline+1500);assert.equal(s.actions.length,0);}finally{await stopManaged(config,session.sessionId);}
 });

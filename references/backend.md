@@ -10,6 +10,7 @@
 {
   "backendRoot": "/absolute/path/to/qianchuan-console",
   "stateRoot": "/absolute/path/to/private-ad-operator-state",
+  "maxRequests": 1000,
   "knowledgeRoot": "/absolute/path/to/wiki001",
   "knowledgeCaches": ["/absolute/path/to/official-document-crawl"]
 }
@@ -26,3 +27,5 @@
 临时调用启动所属后台的随机本机端口，关闭时释放进程与数据库。持续运行由明确授权的托管命令启动，按期限及停止指令退出。
 
 乘方适配依赖 `chengfang-policy/report/http/tasks/task-store`、配置指纹和已有报表模块。公开集成目录提供新增源码和后端接线差异；完整后端由使用者本机部署。
+
+`maxRequests`限制一次命令实际派发的广告请求数，重试也计数；默认1000，可按业务调用量调整。返回的`runtime.requestMetrics`保留数量、耗时、HTTP状态、平台响应码及请求ID。报表导入与本地知识读取可在未配置backendRoot时独立运行；Excel引擎可通过私人配置`artifactModule`指定绝对入口。

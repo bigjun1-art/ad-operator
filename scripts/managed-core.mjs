@@ -1,5 +1,7 @@
 import {createHash} from 'node:crypto';
 import {SCOPED_METRICS,validateMonitor,scopedObservation,boundedNumericChange} from './managed-observation.mjs';
+import {assertObservationFresh,observationMaxAgeMs,evidenceHash,canonical,refreshProposalStatuses} from './observation-integrity.mjs';
+export {refreshProposalStatuses,assertProposalExecutable} from './observation-integrity.mjs';
 const id=v=>typeof v==='string'&&/^[1-9]\d{0,19}$/.test(v);
 const positive=v=>typeof v==='number'&&Number.isFinite(v)&&v>0;
 const copy=v=>structuredClone(v);
@@ -13,6 +15,7 @@ export function validateManagedPolicy(p,{now=Date.now(),requireAuthorization=tru
  if(requireAuthorization&&p.explicitManagedAuthorization!==true||typeof p.userInstruction!=='string'||!p.userInstruction.trim())throw Error('只有用户明确开启持续托管或持续半自动监控，才能启动');
  if(!['recommend','managed'].includes(p.mode)||!Number.isFinite(Date.parse(p.expiresAt))||Date.parse(p.expiresAt)<=now)throw Error('需要运行模式和未来的授权截止时间');
  if(!Number.isInteger(p.intervalSeconds)||p.intervalSeconds<15||p.intervalSeconds>3600)throw Error('查询间隔须为15至3600秒');
+ observationMaxAgeMs(p);
  const mayOmitCost=p.maxObservedCost===undefined&&(p.platform==='suixin'||taskStopsWithoutMoney(p));
  if(!mayOmitCost&&!positive(p.maxObservedCost)||!Number.isInteger(p.maxActionsPerDay)||p.maxActionsPerDay<1)throw Error('需要监控范围成本及每日动作数量上限');
  if(!Array.isArray(p.allowedActions)||!p.allowedActions.length||p.allowedActions.some(a=>!actions[p.platform].has(a)))throw Error('允许动作不属于当前平台已接通的托管范围');
@@ -60,19 +63,29 @@ export function createManagedRunner(policy,{read,prepare,execute,persist=async()
  const p=validateManagedPolicy(policy,{now:now()}),end=Date.parse(p.expiresAt);
  if(state.version!==1||!Array.isArray(state.actions)||!Array.isArray(state.completedRuleIds)||!Array.isArray(state.proposals))throw Error('托管状态损坏，不能重新开始动作');
  if(state.actions.some(unresolvedAction))state.status='needs_reconciliation';
+ const digest=policyDigest(p);
+ const updateProposals=()=>refreshProposalStatuses(state.proposals,{now:now(),policyDigest:digest});
+ const health=(integrity,extra={})=>{state.health??={};state.health.collection={...state.health.collection,...integrity,...extra};};
  let busy=false;
  return {state,async tick(){
   if(busy)throw Error('上一轮仍在进行');busy=true;
   try{
-   if(state.status==='needs_reconciliation'||state.actions.some(unresolvedAction)){state.status='needs_reconciliation';return copy(state);}
+   updateProposals();
+   if(state.status==='needs_reconciliation'||state.actions.some(unresolvedAction)){state.status='needs_reconciliation';await persist(copy(state));return copy(state);}
    if(now()>=end){state.status='expired';await persist(copy(state));return copy(state);}
    const readDay=businessDay(now());
+   health({lastAttemptAt:now()});
    const raw=await read({platform:p.platform,accountId:p.accountId,scope:{...p.scope,range:'realtime'}});
    if(businessDay(now())!==readDay){state.status='day_boundary_recheck';await persist(copy(state));return copy(state);}
+   let integrity=assertObservationFresh(raw?.data,p,now());
    const observation=p.monitor?scopedObservation(raw,p,state.lastSnapshot,now()):null;
    const summary=observation?observation.summary:monitoringSummary(raw,p.platform);
    if(p.maxObservedCost!==undefined&&summary.cost===null)throw Error('金额单位尚未核实，不能比较用户设置的元金额边界或触发金额策略');
-   state.lastSnapshot=observation||{at:now(),summary};state.status='running';
+   const scope=observation?.scope||{...p.scope,platform:p.platform,accountId:p.accountId},scopeKey=observation?.scopeKey||canonical(scope);
+   const evidenceDigest=evidenceHash({scope,epoch:observation?.epoch??raw.data.epoch??null,observedAt:integrity.observedAt,summary,source:raw.data.source??raw.data.topic??null});
+   state.lastSnapshot={...(observation||{at:integrity.observedAt,summary}),scope,scopeKey,evidenceDigest,expiresAt:integrity.expiresAt};state.status='running';
+   health(integrity,{lastCompleteAt:now(),lastObservedAt:integrity.observedAt,reason:null});delete state.lastError;
+   refreshProposalStatuses(state.proposals,{now:now(),policyDigest:digest,scopeKey,evidenceDigest});
    if(observation?.reset)state.ruleObservations={};
    if(p.minActionIntervalSeconds&&state.lastActionAt&&now()-state.lastActionAt<p.minActionIntervalSeconds*1000){state.status='cooldown';await persist(copy(state));return copy(state);}
    const costLimitReached=p.maxObservedCost!==undefined&&summary.cost>=p.maxObservedCost;
@@ -98,14 +111,19 @@ export function createManagedRunner(policy,{read,prepare,execute,persist=async()
      if(reserved+additional>p.maxAdditionalBudget)throw Error('追投追加预算超过本会话授权总额度');
     }
     if(businessDay(now())!==today){state.status='day_boundary_recheck';await persist(copy(state));return copy(state);}
+    if(now()>=end){state.status='expired';updateProposals();break;}
+    integrity=assertObservationFresh(raw.data,p,now());
     if(p.mode==='recommend'){
-     state.proposals.push({ruleId:rule.id,at:now(),prepared});state.completedRuleIds.push(rule.id);continue;
+     const intentHash=prepared?.prepared?.intentHash||evidenceHash({platform:p.platform,accountId:p.accountId,action:rule.action.name,params:rule.action.params??{}});
+     const proposal={id:evidenceHash({policyDigest:digest,ruleId:rule.id,scopeKey,evidenceDigest,intentHash}),ruleId:rule.id,status:'proposed',at:now(),createdAt:new Date(now()).toISOString(),expiresAt:new Date(Math.min(end,integrity.expiresAt)).toISOString(),scopeKey,evidenceDigest,evidenceObservedAt:integrity.observedAt,policyDigest:digest,intentHash,preconditionHash:prepared?.prepared?.preconditionHash??null,action:copy(rule.action),prepared};
+     state.proposals.push(proposal);state.completedRuleIds.push(rule.id);continue;
     }
     if(now()>=end){state.status='expired';break;}
     const originalBudget=rule.action.name==='boost.update'?prepared?.prepared?.before?.task?.budget:0;
     const record={ruleId:rule.id,day:today,at:now(),status:'submitting',attempted:true,action:copy(rule.action),additionalBudget:rule.action.name==='boost.create'||rule.action.name==='boost.update'?Math.max(0,(rule.action.params.budget??originalBudget)-originalBudget):0};
     state.actions.push(record);await persist(copy(state));
     try{
+     try{if(now()>=end)throw Error('托管授权期限已结束');assertObservationFresh(raw.data,p,now());}catch(error){error.requestDispatched=false;if(error.integrity)health(error.integrity,{reason:error.message});throw error;}
      const result=await execute(rule.action,prepared);
      record.result=result;const resultStatus=result?.data?.status;
      if(result?.data?.executionAttempted===false)record.attempted=false;
@@ -122,7 +140,7 @@ export function createManagedRunner(policy,{read,prepare,execute,persist=async()
    }
    if(costLimitReached&&state.status==='running')state.status='cost_limit_reached';
    await persist(copy(state));return copy(state);
-  }catch(e){state.lastError=String(e?.message||e);state.status='read_error';state.ruleObservations={};await persist(copy(state));return copy(state);}
+  }catch(e){state.lastError=String(e?.message||e);state.status='read_error';state.ruleObservations={};health(e.integrity||{status:'failed',errorCode:e.code||'COLLECTION_FAILED'},{reason:state.lastError});updateProposals();await persist(copy(state));return copy(state);}
   finally{busy=false;}
  }};
 }

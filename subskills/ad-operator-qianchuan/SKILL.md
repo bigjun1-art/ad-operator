@@ -31,3 +31,7 @@ node scripts/ad.mjs knowledge read --path '结果中的库内相对路径.md'
 - 追投使用 `boost.create/update/status.set`，查询使用 `boost.tasks.list/task.get/receipt.get`。先 `describe`、再准备与执行，按原requestKey查询不明结果。
 
 连续监控用 `monitor` 绑定账户、商品计划、主播、素材或任务。选择对应期间的官方ROI或具名计算值，设置观察窗口、连续命中、冷却、预算与允许动作，见[持续运行](../../references/managed.md)。
+
+## 报表分析
+
+用户提供本平台CSV或要求生成复盘时，使用[快照报表操作](../../references/reports.md)。子Skill沿用本平台参数，保留账户身份、金额单位、归因窗口与退款成熟度，支持查询、分组、期间对比和四表导出。

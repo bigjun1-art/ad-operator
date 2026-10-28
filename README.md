@@ -56,6 +56,18 @@ ad-operator 将千川、随心推和巨量本地推工作台接入自然对话�
 
 你可以为规则设置连续命中次数、最短观察窗口、动作冷却、调整比例、单次预算和追加预算总额度。严格“小于”和“小于等于”分别执行。产品、期间或累计数据重置时重新开始观察；提交前核对准备时的配置，原值变化则重新计算操作额度。
 
+## 从投放跟踪到复盘报告
+
+直接对Agent说“把这份导出报表按素材分析，列出消耗前十，并做四表周报”，即可沿用当前平台入口完成导入、查询、诊断和导出。平台CSV可按UTF-8或GBK读取，也可从已授权账户采集只读报表。
+
+报表保存一次取数的快照，汇总、排序、诊断、对比和导出共同引用它。金额按列识别单位，原始值与换算值分别保留；长ID使用字符串，缺失值保持空白。支付、净成交和综合营销ROI分别记录，退款成熟度、归因窗口与时区进入报告口径。
+
+周报包含场次核心明细、周报汇总、数据底表、数据字典四张表。分组区域随数据行数展开，底表保留公式，导出后重新打开逐格核对。对话中的追问可直接对同一快照调用汇总、排序、搜索与分组工具，保留源行号。
+
+持续盯盘也会检查数据时效；推荐动作随采集证据和策略期限到期。分页返回保留逐页回执，一次命令记录实际请求次数、耗时和平台请求标识。
+
+命令与数据结构见[报表操作](references/reports.md)，代码参考及融合位置见[四仓库对比](references/source-comparison.md)。
+
 ## 三个平台，一套对话入口
 
 | 平台 | 查询功能 | 投放操作 |
@@ -151,6 +163,8 @@ node scripts/ad.mjs describe account.budget.set --platform local
 - [references/backend.md](references/backend.md)：本地配置、运行状态目录与后端依赖。
 - [references/managed.md](references/managed.md)：托管对象、指标、窗口、停止和结果核对。
 - [references/chengfang.md](references/chengfang.md)：乘方口径、素材条件和任务生命周期。
+- [references/reports.md](references/reports.md)：快照、查询、条件诊断与四表导出。
+- [references/source-comparison.md](references/source-comparison.md)：四个参考仓库的源码差量与接入位置。
 - [references/knowledge.md](references/knowledge.md)：三平台知识入口和本地正文缓存。
 
 运行测试：

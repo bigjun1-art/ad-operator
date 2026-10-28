@@ -1,0 +1,106 @@
+--- a/server.mjs
++++ b/server.mjs
+@@ -12,6 +12,7 @@
+  * - 写操作（启停/改ROI/删素材）前端弹窗列出清单，用户确认后才调后端执行。
+  */
+ import http from "node:http";
++import {mergeSourceObservation} from "./source-observation.mjs";
+ import {homedir} from 'node:os';
+ import {createChengfangHandler} from './chengfang-http.mjs';
+ import {createChengfangTaskStore} from './chengfang-task-store.mjs';
+@@ -48,6 +49,7 @@
+ import { fileURLToPath } from "node:url";
+ import { AsyncLocalStorage } from "node:async_hooks";
+ import { parseExactJSON, stringifyExact, createTransport, collectPages, raw } from "./data-core.mjs";
++import {createCommandRequestContext} from "./command-request-context.mjs";
+ import { openWatchStore, createWatchRunner, validateTarget, targetKey, parseCreationTime } from "./watch-engine.mjs";
+ // 使用进程已有代理配置；不修改系统网络设置或输出代理地址。
+ if(process.env.NODE_USE_ENV_PROXY!=='0' && (process.env.HTTPS_PROXY||process.env.https_proxy||process.env.HTTP_PROXY||process.env.http_proxy) && typeof http.setGlobalProxyFromEnv==='function')http.setGlobalProxyFromEnv();
+@@ -60,16 +62,19 @@
+ const UNI_LIST_INTERVAL_MS=Math.max(1000,Number(process.env.UNI_LIST_INTERVAL_MS||6500));
+ const RATE_RETRY_BASE_MS=Math.max(1,Number(process.env.RATE_RETRY_BASE_MS||2000));
+ const RATE_RETRY_MAX_MS=Math.max(RATE_RETRY_BASE_MS,Number(process.env.RATE_RETRY_MAX_MS||15000));
+-const baseTransport = createTransport({ concurrency: 3, minInterval: 300, refreshFor: refreshAccessToken, endpointIntervals: {"/open_api/v1.0/qianchuan/uni_promotion/list/":UNI_LIST_INTERVAL_MS}, tokenFor: app => app === "local" ? localRead(LOCAL_SERVICES.access) : getAccessToken(app) });
++const baseTransport = createTransport({ requestContext:()=>requestContext.getStore()?.commandRequests, concurrency: 3, minInterval: 300, refreshFor: refreshAccessToken, endpointIntervals: {"/open_api/v1.0/qianchuan/uni_promotion/list/":UNI_LIST_INTERVAL_MS}, tokenFor: app => app === "local" ? localRead(LOCAL_SERVICES.access) : getAccessToken(app) });
+ const previewLiveWriteAllowed=()=>{const ctx=requestContext.getStore();return ctx?.executionMode==='live'&&ctx?.previewLiveAuthorized===true;};
+ const transport=READONLY_PREVIEW?guardPreviewTransport(baseTransport,{canWrite:previewLiveWriteAllowed}):baseTransport;
+-const apiGet = (p, opts = {}) => {
++const apiGet = async (p, opts = {}) => {
+   if(READONLY_PREVIEW)assertPreviewUpstream("GET",p);
+   validateRuntimeApiRequest("GET",p,opts);
+   const scoped={...opts,signal:requestContext.getStore()?.signal};
+-  return opts.allPages !== false && opts.query?.page === 1 && Number(opts.query?.page_size) !== 1
++  const result=await (opts.allPages !== false && opts.query?.page === 1 && Number(opts.query?.page_size) !== 1
+     ? collectPages(transport.get,p,scoped)
+-    : transport.get(p,scoped);
++    : transport.get(p,scoped));
++  const observation=requestContext.getStore()?.sourceObservation;
++  if(observation){if(Object.hasOwn(result,'sourceObservedAt'))observation.times.push(result.sourceObservedAt);else observation.unknown=true;if(result.observationTimeUnknown===true)observation.unknown=true;}
++  return result;
+ };
+ const apiPost = (p, opts) => {
+   const ctx=requestContext.getStore(),writeDeadline=ctx?.headlessWriteDeadline;
+@@ -257,11 +262,15 @@
+   res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
+   res.end(JSON.stringify(obj));
+ }
+-function ok(res, data) { send(res, 200, { ok: true, data }); }
++function ok(res, data) {
++  const observation=requestContext.getStore()?.sourceObservation;
++  if(process.env.WORKBENCH_HEADLESS_KEY&&observation)data=mergeSourceObservation(data,{times:observation.times,unknown:observation.unknown});
++  send(res, 200, { ok: true, data });
++}
+ function fail(res,status,msg,details={}){
+   const safe={};if(Number.isInteger(details.code)||(typeof details.code==='string'&&/^[A-Z0-9_]{1,80}$/.test(details.code)))safe.code=details.code;
+   if(Number.isFinite(details.retryAfter)&&details.retryAfter>=0)safe.retryAfter=details.retryAfter;if(details.rateLimited===true)safe.rateLimited=true;
+-  if(details.code==='HEADLESS_AUTHORIZATION_EXPIRED'&&details.requestDispatched===false)safe.requestDispatched=false;
++  if(['HEADLESS_AUTHORIZATION_EXPIRED','COMMAND_REQUEST_LIMIT'].includes(details.code)&&details.requestDispatched===false)safe.requestDispatched=false;
+   send(res,status,{ok:false,error:msg,...safe});
+ }
+ 
+@@ -1022,7 +1031,7 @@
+   return targets;
+ }
+ async function collectWatchTarget(t,{signal}={}) {
+-  return requestContext.run({advertiser_id:t.accountId,dim:t.mode,scene:t.liveStrategy?.enabled?"live":"all",signal},async()=>{
++  return requestContext.run({...requestContext.getStore(),advertiser_id:t.accountId,dim:t.mode,scene:t.liveStrategy?.enabled?"live":"all",signal},async()=>{
+     const range=resolveRange("realtime"),day=range.startTime.slice(0,10),started=Date.now();
+     let plans=[],standard=[],balance=null,notes=[],live=null;
+     if(t.liveStrategy?.enabled){
+@@ -1942,8 +1951,27 @@
+  executionMode:()=>requestContext.getStore()?.headlessManaged===true?'managed':'manual',
+  precondition:()=>requestContext.getStore()?.headlessPrecondition,
+ });
++function commandRequestLimit() {
++  const raw=process.env.WORKBENCH_COMMAND_MAX_REQUESTS ?? readConfig().command_max_requests ?? 1000;
++  const value=typeof raw==='string'&&/^\d+$/.test(raw)?Number(raw):raw;
++  if(!Number.isSafeInteger(value)||value<0)throw Object.assign(Error('单命令请求上限须为非负安全整数'),{code:'COMMAND_REQUEST_CONFIG'});
++  return value;
++}
++// This process belongs to one temporary command. Ordinary server requests get separate contexts below.
++let temporaryCommandRequests;
+ const server = http.createServer((req, res) => {
+   if(process.env.WORKBENCH_HEADLESS_KEY&&req.headers['x-workbench-headless-key']!==process.env.WORKBENCH_HEADLESS_KEY)return fail(res,403,'此临时后台仅接受所属对话进程的请求');
++  let commandRequests;
++  try {
++    commandRequests=process.env.WORKBENCH_HEADLESS_KEY
++      ? (temporaryCommandRequests ??= createCommandRequestContext({maxRequests:commandRequestLimit()}))
++      : createCommandRequestContext({maxRequests:commandRequestLimit()});
++  } catch(e) {return failFromError(res,e);}
++  if(new URL(req.url,'http://127.0.0.1').pathname==='/api/internal/headless/request-metrics'){
++    if(!process.env.WORKBENCH_HEADLESS_KEY)return fail(res,404,'接口不存在');
++    if(req.method!=='GET')return fail(res,405,'此接口只接受GET');
++    return ok(res,commandRequests.snapshot());
++  }
+   let headlessWriteDeadline;
+   if(process.env.WORKBENCH_HEADLESS_KEY&&req.method==='POST'){
+     const value=req.headers['x-workbench-headless-expires-at'];
+@@ -1955,7 +1983,7 @@
+   if (!/^\d+$/.test(advertiser_id)) return fail(res, 400, "账户 ID 无效");
+   const controller=new AbortController();res.once("close",()=>controller.abort());
+   const executionMode=req.headers["x-workbench-execution-mode"]==="simulate"?"simulate":"live";
+-  requestContext.run({advertiser_id, executionMode, signal:controller.signal,headlessPrecondition:process.env.WORKBENCH_HEADLESS_KEY?req.headers['x-workbench-headless-precondition']:undefined,headlessManaged:!!process.env.WORKBENCH_HEADLESS_KEY&&req.headers['x-workbench-headless-mode']==='managed', dim:requested.get("dim") || "all", scene:requested.get("scene") || "all",...(headlessWriteDeadline===undefined?{}:{headlessWriteDeadline})}, () => handleRequest(req,res));
++  requestContext.run({advertiser_id, executionMode, commandRequests, sourceObservation:{times:[],unknown:false}, signal:controller.signal,headlessPrecondition:process.env.WORKBENCH_HEADLESS_KEY?req.headers['x-workbench-headless-precondition']:undefined,headlessManaged:!!process.env.WORKBENCH_HEADLESS_KEY&&req.headers['x-workbench-headless-mode']==='managed', dim:requested.get("dim") || "all", scene:requested.get("scene") || "all",...(headlessWriteDeadline===undefined?{}:{headlessWriteDeadline})}, () => handleRequest(req,res));
+ });
+ async function handleRequest(req, res) {
+   const url = new URL(req.url, `http://${HOST}:${PORT}`);

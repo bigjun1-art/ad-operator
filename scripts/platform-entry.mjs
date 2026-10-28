@@ -7,7 +7,7 @@ export function platformCommand(platform,argv){
  if(argv.some(v=>v==='--platform'||v.startsWith('--platform=')))throw Error('子Skill的平台已固定，不能覆盖；跨平台请回到主Skill重新路由');
  const [mode,...args]=argv;
  if(!mode||['help','--help','doctor','managed'].includes(mode))return [...argv];
- if(mode==='actions'){if(args.length)throw Error('子Skill actions不接受另一个平台');return ['actions',platform];}
+ if(['actions','capabilities'].includes(mode)){if(args.length)throw Error('子Skill actions不接受另一个平台');return [mode,platform];}
  return [...argv,'--platform',platform];
 }
 export async function runPlatformEntry(platform,argv=process.argv.slice(2),{read=readInput,run=adMain}={}){

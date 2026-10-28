@@ -5,7 +5,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {pathToFileURL} from 'node:url';
-import {validateManagedPolicy,policyDigest,unresolvedAction} from './managed-core.mjs';
+import {validateManagedPolicy,policyDigest,unresolvedAction,refreshProposalStatuses} from './managed-core.mjs';
 import {invokeBackend} from './config.mjs';
 const exec=promisify(execFile),worker=fileURLToPath(new URL('./managed-worker.mjs',import.meta.url));
 export async function saveJson(file,data){const temp=file+'.'+process.pid+'.tmp';await writeFile(temp,JSON.stringify(data,null,2)+'\n',{mode:0o600});await rename(temp,file);}
@@ -14,7 +14,7 @@ async function ownedProcess(record,directory){
  if(!Number.isSafeInteger(record?.pid)||record.pid<1)return false;
  try{const {stdout}=await exec('ps',['-p',String(record.pid),'-o','command=']);return stdout.includes(worker)&&stdout.includes(directory)&&stdout.includes(record.nonce);}catch{return false;}
 }
-export async function managedStatus(config,id){const directory=sessionPath(config,id),record=JSON.parse(await readFile(path.join(directory,'process.json'),'utf8')),state=JSON.parse(await readFile(path.join(directory,'state.json'),'utf8'));const running=await ownedProcess(record,directory);return {sessionId:id,...state,...(!running&&['starting','running','read_error','cooldown','day_boundary_recheck'].includes(state.status)?{status:state.actions?.some(unresolvedAction)?'needs_reconciliation':'stopped_unexpectedly'}:{}),processRunning:running};}
+export async function managedStatus(config,id){const directory=sessionPath(config,id),record=JSON.parse(await readFile(path.join(directory,'process.json'),'utf8')),state=JSON.parse(await readFile(path.join(directory,'state.json'),'utf8'));const running=await ownedProcess(record,directory);refreshProposalStatuses(state.proposals||[],{now:Date.now()});return {sessionId:id,...state,...(!running&&['starting','running','read_error','cooldown','day_boundary_recheck'].includes(state.status)?{status:state.actions?.some(unresolvedAction)?'needs_reconciliation':'stopped_unexpectedly'}:{}),processRunning:running};}
 export async function startManaged(config,policy,{confirmed=false}={}){
  const checked=validateManagedPolicy(policy);if(!confirmed)throw Error('启动常驻需要明确的 --confirm-managed，并来自用户本轮开启托管的指令');
  const {normalizeHeadlessRequest}=await import(pathToFileURL(path.join(config.backendRoot,'headless-actions.mjs')));

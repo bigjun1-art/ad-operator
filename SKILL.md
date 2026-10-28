@@ -1,6 +1,6 @@
 ---
 name: ad-operator
-description: "通过自然对话管理千川、随心推和巨量本地推：读取平台知识、账户和投放数据，执行授权的预算、ROI、启停与素材追投操作，支持指定对象的分钟跟踪、半自动建议和限时托管。"
+description: "通过自然对话管理千川、随心推和巨量本地推：读取平台知识、账户和投放数据，分析快照报表和生成周报，执行授权的预算、ROI、启停与素材追投操作，支持指定对象的分钟跟踪、半自动建议和限时托管。"
 ---
 
 # 统一投流助手
@@ -39,6 +39,12 @@ node scripts/ad.mjs describe boost.create --platform qianchuan
 用 `actions` 和 `describe` 获取当前动作、字段和枚举。账户列表以外的操作须指定单个账户 ID；计划、主播、素材、订单和追投任务 ID 作为各自字段的精确字符串传递。
 
 查询使用 `read ACTION --platform PLATFORM --account ID`。参数通过标准输入传入 `{"params":{...}}`。乘方的期间、官方指标、素材和任务规则见[乘方操作](references/chengfang.md)。
+
+## 分析报表和生成周报
+
+按[报表操作](references/reports.md)导入平台CSV，或从精确账户采集只读报表，保存数据快照。用户追问素材表现、排序、期间比较和条件诊断时查询同一快照；报告可导出JSON、Markdown或四表Excel。列明金额单位、统计期间、账户角色、归因窗口与退款成熟度，条件阈值使用用户提供的经营要求。
+
+`capabilities PLATFORM`列出后端动作及读写属性，并给出本地知识与报表工具。查询所得结果与生成的报表分别保留来源和快照ID。
 
 ## 执行投放调整
 

@@ -1,3 +1,4 @@
+import {assertObservationFresh,canonical} from './observation-integrity.mjs';
 const exact=v=>typeof v==='string'&&/^[1-9]\d{0,19}$/.test(v);
 const finite=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
 export const SCOPED_METRICS=new Set(['marketing_roi','calculated_marketing_roi','cost_delta','orders_delta','cost_per_minute','orders_per_minute','ctr']);
@@ -31,7 +32,8 @@ export function scopedObservation(raw,policy,previous,at){
  if(raw?.ok!==true||d?.complete!==true||!s||s.accountId!==policy.accountId||s.level!==m.level)throw Error('跟踪数据的账户、层级或完整性与策略不一致');
  for(const k of ['scene','period','ad_id','anchor_id','material_id','task_id'])if(m[k]!==undefined&&s[k]!==m[k])throw Error('跟踪数据对象或期间不一致：'+k);
  const source=d.summary||{},summary=Object.fromEntries(['cost','orders','marketing_roi','calculated_marketing_roi','payment_roi','net_roi','cash_return_ratio','ctr'].map(k=>[k,finite(source[k])]));
- const key=JSON.stringify(s),epoch=String(d.epoch??key),observedAt=finite(d.observedAt)??at;
+ const integrity=assertObservationFresh(d,policy,at);
+ const key=canonical(s),epoch=String(d.epoch??key),observedAt=integrity.observedAt;
  const same=previous?.scopeKey===key&&previous?.epoch===epoch&&observedAt>previous.at&&previous.day===new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date(at));
  const seconds=same?(observedAt-previous.at)/1000:null;
  for(const metric of ['cost','orders']){

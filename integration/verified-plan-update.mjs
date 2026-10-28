@@ -11,7 +11,7 @@ export async function verifiedPlanUpdate({accountId,planId,type,value,read,write
  const before=await fresh(),from=valueOf(before,type);assertConfigurationHash(expectedConfigurationHash,planConfigurationHash(before));if(type==='roi'&&!before.delivery_setting?.deep_external_action)throw Object.assign(Error('计划优化目标口径未核实，未提交ROI修改'),{statusCode:409});if(from===null||from===undefined)throw Object.assign(Error('计划当前参数未核实，未提交修改'),{statusCode:409});
  if(same(from,value))return{verified:true,unchanged:true,planId,type,from,to:value};
  let response;
- try{response=await write({before});}catch(e){if(e.code==='HEADLESS_AUTHORIZATION_EXPIRED'&&e.requestDispatched===false)throw e;if(e.code===40000||['API_REQUEST_CONTRACT','API_CONTRACT_UNVERIFIED','OFFICIAL_CONTRACT'].includes(e.code))throw Object.assign(Error('请求未通过平台或本地契约校验：'+e.message),{code:'PLATFORM_WRITE_REJECTED',statusCode:400});throw Object.assign(Error('提交结果未知，须先回读计划核实；未自动重发：'+e.message),{code:'WRITE_RESULT_UNKNOWN',statusCode:502});}
+ try{response=await write({before});}catch(e){if(['HEADLESS_AUTHORIZATION_EXPIRED','COMMAND_REQUEST_LIMIT'].includes(e.code)&&e.requestDispatched===false)throw e;if(e.code===40000||['API_REQUEST_CONTRACT','API_CONTRACT_UNVERIFIED','OFFICIAL_CONTRACT'].includes(e.code))throw Object.assign(Error('请求未通过平台或本地契约校验：'+e.message),{code:'PLATFORM_WRITE_REJECTED',statusCode:400});throw Object.assign(Error('提交结果未知，须先回读计划核实；未自动重发：'+e.message),{code:'WRITE_RESULT_UNKNOWN',statusCode:502});}
  if(response?.code!==0)throw Object.assign(Error('写入回执未取得明确成功码，结果待核实'),{code:'WRITE_RESULT_UNKNOWN',statusCode:502});
  const rows=response?.data?.results;
  if(Array.isArray(rows)&&rows.length){
